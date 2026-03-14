@@ -1,4 +1,4 @@
-import { startTransition, useDeferredValue, useState } from 'react'
+import { startTransition, useDeferredValue, useEffect, useState } from 'react'
 import './App.css'
 import {
   downloadContactsCsv,
@@ -7,7 +7,7 @@ import {
 } from './lib/exporters'
 import { parseSnapchatZip } from './lib/snapchatParser'
 import { sampleDataset } from './sampleData'
-import type { ParsedDataset } from './types'
+import type { NormalizedEvent, ParsedDataset } from './types'
 
 const statLabels = [
   ['totalEvents', 'Events kept'],
@@ -15,6 +15,9 @@ const statLabels = [
   ['locationEvents', 'Location rows'],
   ['uniqueContacts', 'Unique contacts'],
 ] as const
+
+const ACCESS_KEY = 'export-viewer-pro-access-code'
+const NOTES_KEY = 'export-viewer-pro-private-notes'
 
 function formatDate(value: string | null) {
   if (!value) {
@@ -29,28 +32,61 @@ function formatDate(value: string | null) {
   return date.toLocaleString()
 }
 
+function formatDay(value: string) {
+  return new Date(value).toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+  })
+}
+
+function eventLabel(event: NormalizedEvent) {
+  return event.contact ?? event.locationName ?? event.device ?? 'Unknown source'
+}
+
 function App() {
   const [dataset, setDataset] = useState<ParsedDataset>(sampleDataset)
   const [status, setStatus] = useState('Showing sample data until you upload a Snapchat export zip.')
   const [isLoading, setIsLoading] = useState(false)
   const [contactFilter, setContactFilter] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [savedAccessCode, setSavedAccessCode] = useState('')
+  const [accessInput, setAccessInput] = useState('')
+  const [isUnlocked, setIsUnlocked] = useState(false)
+  const [notes, setNotes] = useState('')
+
+  useEffect(() => {
+    const storedCode = window.localStorage.getItem(ACCESS_KEY) ?? ''
+    const storedNotes = window.localStorage.getItem(NOTES_KEY) ?? ''
+    setSavedAccessCode(storedCode)
+    setIsUnlocked(!storedCode)
+    setNotes(storedNotes)
+  }, [])
+
+  useEffect(() => {
+    window.localStorage.setItem(NOTES_KEY, notes)
+  }, [notes])
 
   const deferredFilter = useDeferredValue(contactFilter)
-
   const normalizedFilter = deferredFilter.trim().toLowerCase()
+
   const filteredEvents = !normalizedFilter
-    ? dataset.events.slice(-8).reverse()
+    ? dataset.events.slice(-10).reverse()
     : dataset.events
         .filter((event) => {
-          const haystack = [event.contact, event.text, event.detail, event.locationName]
+          const haystack = [
+            event.contact,
+            event.text,
+            event.detail,
+            event.locationName,
+            event.device,
+          ]
             .filter(Boolean)
             .join(' ')
             .toLowerCase()
 
           return haystack.includes(normalizedFilter)
         })
-        .slice(-8)
+        .slice(-10)
         .reverse()
 
   const topContacts = dataset.contacts
@@ -58,6 +94,48 @@ function App() {
       normalizedFilter ? contact.name.toLowerCase().includes(normalizedFilter) : true,
     )
     .slice(0, 6)
+
+  const riskScore = Math.min(
+    100,
+    dataset.signals.length * 12 +
+      dataset.keywordHits.length * 9 +
+      topContacts.reduce((sum, contact) => sum + contact.lateNightInteractions, 0) * 2,
+  )
+
+  const categoryCards = [
+    { label: 'Chats', value: dataset.stats.chatEvents, tone: 'sun' },
+    { label: 'Locations', value: dataset.stats.locationEvents, tone: 'sea' },
+    { label: 'Logins', value: dataset.stats.loginEvents, tone: 'ink' },
+    { label: 'Searches', value: dataset.stats.searchEvents, tone: 'rose' },
+  ]
+
+  const hourlyActivity = Array.from({ length: 24 }, (_, hour) => {
+    const count = dataset.events.filter((event) => {
+      if (!event.timestamp) {
+        return false
+      }
+
+      return new Date(event.timestamp).getHours() === hour
+    }).length
+
+    return { hour, count }
+  })
+  const maxHourCount = Math.max(...hourlyActivity.map((bucket) => bucket.count), 1)
+
+  const dailyActivityMap = new Map<string, number>()
+  dataset.events.forEach((event) => {
+    if (!event.timestamp) {
+      return
+    }
+
+    const day = event.timestamp.slice(0, 10)
+    dailyActivityMap.set(day, (dailyActivityMap.get(day) ?? 0) + 1)
+  })
+  const dailyActivity = [...dailyActivityMap.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .slice(-8)
+    .map(([day, count]) => ({ day, count }))
+  const maxDayCount = Math.max(...dailyActivity.map((entry) => entry.count), 1)
 
   async function handleUpload(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0]
@@ -93,17 +171,86 @@ function App() {
     }
   }
 
+  function saveAccessCode() {
+    if (!accessInput.trim()) {
+      setError('Enter a private code first.')
+      return
+    }
+
+    window.localStorage.setItem(ACCESS_KEY, accessInput)
+    setSavedAccessCode(accessInput)
+    setIsUnlocked(true)
+    setError(null)
+    setStatus('Private code saved on this device. It is only a local privacy gate, not server auth.')
+    setAccessInput('')
+  }
+
+  function unlockWithCode() {
+    if (!savedAccessCode) {
+      setIsUnlocked(true)
+      return
+    }
+
+    if (accessInput === savedAccessCode) {
+      setIsUnlocked(true)
+      setError(null)
+      setAccessInput('')
+      return
+    }
+
+    setError('That private code does not match this browser.')
+  }
+
+  function clearPrivacyGate() {
+    window.localStorage.removeItem(ACCESS_KEY)
+    setSavedAccessCode('')
+    setIsUnlocked(true)
+    setAccessInput('')
+    setStatus('Removed the local privacy gate from this browser.')
+  }
+
+  if (!isUnlocked) {
+    return (
+      <main className="lock-screen">
+        <section className="lock-card">
+          <p className="eyebrow">Personal mode</p>
+          <h1>Unlock your private dashboard.</h1>
+          <p className="hero-text">
+            This gate is stored only in this browser to keep casual visitors out. It is not
+            a secure server-side login.
+          </p>
+          <input
+            className="lock-input"
+            onChange={(event) => setAccessInput(event.target.value)}
+            placeholder={savedAccessCode ? 'Enter your access code' : 'Create an access code'}
+            type="password"
+            value={accessInput}
+          />
+          <div className="hero-actions">
+            <button
+              className="primary-link button-reset"
+              onClick={savedAccessCode ? unlockWithCode : saveAccessCode}
+              type="button"
+            >
+              {savedAccessCode ? 'Unlock dashboard' : 'Create access code'}
+            </button>
+          </div>
+          {error ? <p className="lock-error">{error}</p> : null}
+        </section>
+      </main>
+    )
+  }
+
   return (
     <main className="app-shell">
-      <section className="hero">
+      <section className="hero hero-advanced">
         <div className="hero-copy">
-          <p className="eyebrow">Consent-based Snapchat export analyzer</p>
-          <h1>Upload a Snapchat export zip and review unusual patterns locally.</h1>
+          <p className="eyebrow">Private export dashboard</p>
+          <h1>One personal workspace for uploads, signal review, and private notes.</h1>
           <p className="hero-text">
-            This dashboard is built for consent-based review of a Snapchat export that the
-            account owner has chosen to analyze. It highlights contact spikes, late-night
-            activity, search patterns, location overlap, device changes, and sensitive
-            saved-chat phrases without sending uploads to a server.
+            Your dashboard runs browser-side, keeps exports local, and layers in a richer
+            command center: activity maps, contact scoring, session notes, and one-click
+            exports for whatever you decide to keep.
           </p>
 
           <div className="hero-actions">
@@ -120,7 +267,10 @@ function App() {
               }}
               type="button"
             >
-              Use sample data
+              Load demo data
+            </button>
+            <button className="ghost-link" onClick={clearPrivacyGate} type="button">
+              Remove local code
             </button>
           </div>
 
@@ -152,30 +302,25 @@ function App() {
           </div>
         </div>
 
-        <aside className="hero-panel">
-          <p className="panel-label">Useful signals</p>
-          <ul className="stack-list compact">
-            <li>
-              <span>Contact growth</span>
-              <strong>frequency spikes</strong>
-            </li>
-            <li>
-              <span>Saved chat review</span>
-              <strong>phrase matches</strong>
-            </li>
-            <li>
-              <span>Context signals</span>
-              <strong>locations + searches</strong>
-            </li>
-            <li>
-              <span>Audit trail</span>
-              <strong>logins + devices</strong>
-            </li>
-          </ul>
+        <aside className="hero-panel hero-score">
+          <p className="panel-label">Session score</p>
+          <div className="score-ring">
+            <strong>{riskScore}</strong>
+            <span>/100</span>
+          </div>
           <p className="panel-note">
-            Heuristics are clues, not proof. The dashboard should support careful review,
-            not jump to conclusions.
+            This is a weighted heuristic based on detected signals, phrase matches, and
+            repeated late-night contact activity. It is meant to prioritize review, not
+            decide intent.
           </p>
+          <div className="mini-stat-grid">
+            {categoryCards.map((card) => (
+              <article className={`mini-stat tone-${card.tone}`} key={card.label}>
+                <span>{card.label}</span>
+                <strong>{card.value}</strong>
+              </article>
+            ))}
+          </div>
         </aside>
       </section>
 
@@ -190,6 +335,50 @@ function App() {
       </section>
 
       <section className="dashboard-grid">
+        <article className="dashboard-card dashboard-span-two">
+          <div className="section-heading">
+            <p className="eyebrow">Activity map</p>
+            <h3>When the account is busiest</h3>
+          </div>
+
+          <div className="viz-grid">
+            <section className="viz-card">
+              <h4>Hourly activity</h4>
+              <div className="bar-chart">
+                {hourlyActivity.map((bucket) => (
+                  <div className="bar-slot" key={bucket.hour}>
+                    <div
+                      className="bar-fill"
+                      style={{
+                        height: `${Math.max(10, (bucket.count / maxHourCount) * 100)}%`,
+                      }}
+                    />
+                    <span>{bucket.hour}</span>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <section className="viz-card">
+              <h4>Recent daily volume</h4>
+              <div className="day-chart">
+                {dailyActivity.map((entry) => (
+                  <div className="day-row" key={entry.day}>
+                    <span>{formatDay(entry.day)}</span>
+                    <div className="day-track">
+                      <div
+                        className="day-fill"
+                        style={{ width: `${Math.max(8, (entry.count / maxDayCount) * 100)}%` }}
+                      />
+                    </div>
+                    <strong>{entry.count}</strong>
+                  </div>
+                ))}
+              </div>
+            </section>
+          </div>
+        </article>
+
         <article className="dashboard-card">
           <div className="section-heading">
             <p className="eyebrow">Detection</p>
@@ -213,6 +402,20 @@ function App() {
 
         <article className="dashboard-card">
           <div className="section-heading">
+            <p className="eyebrow">Private notes</p>
+            <h3>Session notes saved only in this browser</h3>
+          </div>
+
+          <textarea
+            className="notes-field"
+            onChange={(event) => setNotes(event.target.value)}
+            placeholder="Add what stands out, which contacts need follow-up, or what to export later..."
+            value={notes}
+          />
+        </article>
+
+        <article className="dashboard-card">
+          <div className="section-heading">
             <p className="eyebrow">Contacts</p>
             <h3>Most active contacts and repeated patterns</h3>
           </div>
@@ -229,12 +432,16 @@ function App() {
 
           <div className="table-list">
             {topContacts.map((contact) => (
-              <article className="table-row" key={contact.name}>
-                <strong>{contact.name}</strong>
-                <span>{contact.interactions} interactions</span>
-                <span>{contact.lateNightInteractions} late-night</span>
-                <span>{contact.keywordHits} phrase hits</span>
-                <span>Last seen {formatDate(contact.lastSeen)}</span>
+              <article className="table-row contact-row" key={contact.name}>
+                <div>
+                  <strong>{contact.name}</strong>
+                  <span>Last seen {formatDate(contact.lastSeen)}</span>
+                </div>
+                <div>
+                  <span>{contact.interactions} interactions</span>
+                  <span>{contact.lateNightInteractions} late-night</span>
+                  <span>{contact.keywordHits} phrase hits</span>
+                </div>
               </article>
             ))}
             {topContacts.length === 0 ? (
@@ -276,7 +483,7 @@ function App() {
             {filteredEvents.map((event) => (
               <article className="table-row event-row" key={event.id}>
                 <strong>{event.category}</strong>
-                <span>{event.contact ?? event.locationName ?? 'Unknown source'}</span>
+                <span>{eventLabel(event)}</span>
                 <span>{event.text ?? event.detail ?? 'No free text'}</span>
                 <span>{formatDate(event.timestamp)}</span>
               </article>
@@ -303,28 +510,6 @@ function App() {
                 Sample data is loaded, so no zip file inventory is shown yet.
               </p>
             ) : null}
-          </div>
-        </article>
-
-        <article className="dashboard-card">
-          <div className="section-heading">
-            <p className="eyebrow">MVP roadmap</p>
-            <h3>Useful features to add next</h3>
-          </div>
-
-          <ol className="roadmap-list">
-            <li>Export a PDF review packet and CSV evidence tables from the current filters.</li>
-            <li>Let the user edit the phrase watchlist and define their own boundaries.</li>
-            <li>Add a visual day-by-day timeline with location and communication overlap.</li>
-            <li>Score new or suddenly frequent contacts with a transparent explanation panel.</li>
-          </ol>
-
-          <div className="callout">
-            <p className="callout-title">Cheap hosting path</p>
-            <p>
-              Keep this as a static app on Firebase Hosting first. Only add Cloud Run if we
-              need secure user accounts or server-generated exports.
-            </p>
           </div>
         </article>
       </section>
