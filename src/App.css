@@ -152,6 +152,11 @@
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.28);
 }
 
+.active-chip {
+  border-color: rgba(103, 249, 183, 0.72);
+  box-shadow: 0 0 0 1px rgba(103, 249, 183, 0.22);
+}
+
 .full-width {
   width: 100%;
 }

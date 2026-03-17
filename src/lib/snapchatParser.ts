@@ -38,6 +38,12 @@ function extensionOf(path: string) {
   return index >= 0 ? path.slice(index).toLowerCase() : ''
 }
 
+function baseName(path: string) {
+  const normalized = path.replace(/\\/g, '/')
+  const lastSegment = normalized.split('/').pop() ?? normalized
+  return lastSegment.replace(/\.[^.]+$/, '')
+}
+
 function hasSupportedExtension(path: string) {
   return SUPPORTED_EXTENSIONS.includes(extensionOf(path))
 }
@@ -279,6 +285,25 @@ function pickNumber(record: FlatRecord, needles: string[]) {
   return Number.isFinite(parsed) ? parsed : null
 }
 
+function derivePathContact(path: string) {
+  const stem = baseName(path)
+  const normalized = stem
+    .replace(/[_-]+/g, ' ')
+    .replace(/\b(chat|history|saved|conversation|messages|snap|export|data)\b/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  if (!normalized || normalized.length < 2) {
+    return null
+  }
+
+  if (/^\d+$/.test(normalized)) {
+    return null
+  }
+
+  return normalized
+}
+
 function normalizeTimestamp(value: string | null) {
   if (!value) {
     return null
@@ -324,10 +349,32 @@ function normalizeEvent(
       pickString(record, ['timestamp', 'created', 'saved', 'sent', 'date', 'time']),
     ),
     contact:
-      pickString(record, ['friend', 'contact', 'display_name', 'participant', 'recipient']) ??
-      pickString(record, ['username', 'user']) ??
+      pickString(record, [
+        'friend',
+        'contact',
+        'display_name',
+        'participant',
+        'recipient',
+        'sender',
+        'from',
+        'to',
+        'conversation_title',
+        'display',
+      ]) ??
+      pickString(record, ['username', 'user', 'handle']) ??
+      (category === 'chat' ? derivePathContact(path) : null) ??
       null,
-    text: pickString(record, ['message', 'chat', 'content', 'body', 'text']),
+    text: pickString(record, [
+      'message',
+      'chat',
+      'content',
+      'body',
+      'text',
+      'caption',
+      'savedchat',
+      'snap_caption',
+      'line',
+    ]),
     detail:
       pickString(record, ['query', 'filename', 'email', 'ip', 'status', 'device']) ?? null,
     locationName: pickString(record, ['location', 'place', 'city', 'address']),

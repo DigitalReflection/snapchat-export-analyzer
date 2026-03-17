@@ -18,8 +18,12 @@ const NOTES_KEY = 'export-viewer-pro-private-notes'
 const AI_SETTINGS_KEY = 'export-viewer-pro-ai-settings'
 const CONTACT_LABELS_KEY = 'export-viewer-pro-contact-labels'
 const DEFAULT_MODELS: Record<AIProvider, string> = {
-  gemini: 'gemini-2.5-flash',
-  openai: 'gpt-4.1-nano',
+  gemini: 'gemini-2.5-pro',
+  openai: 'gpt-5.1',
+}
+const MODEL_PRESETS: Record<AIProvider, string[]> = {
+  gemini: ['gemini-2.5-pro', 'gemini-2.5-flash'],
+  openai: ['gpt-5.1', 'gpt-5-mini'],
 }
 const SUPPORTED_EXPORT_AREAS = [
   'Profiles',
@@ -284,6 +288,18 @@ export default function App() {
             <label><span>Model</span><input type="text" value={aiSettings.model} onChange={(event) => setAiSettings((current) => ({ ...current, model: event.target.value }))} /></label>
             <label className="span-two"><span>API key</span><input type="password" placeholder="Paste API key" value={aiSettings.apiKey} onChange={(event) => setAiSettings((current) => ({ ...current, apiKey: event.target.value }))} /></label>
             <label className="span-two"><span>AI request</span><textarea className="ai-prompt" value={aiQuestion} onChange={(event) => setAiQuestion(event.target.value)} /></label>
+          </div>
+          <div className="hero-pills">
+            {MODEL_PRESETS[aiSettings.provider].map((model) => (
+              <button
+                className={aiSettings.model === model ? 'chip-button active-chip' : 'chip-button'}
+                key={model}
+                onClick={() => setAiSettings((current) => ({ ...current, model }))}
+                type="button"
+              >
+                {model}
+              </button>
+            ))}
           </div>
           <button className="primary-button full-width" onClick={handleAiRun} type="button">{isAiLoading ? 'Analyzing full chat history...' : 'Run AI over full chat history'}</button>
           {aiError ? <p className="error-line">{aiError}</p> : null}
