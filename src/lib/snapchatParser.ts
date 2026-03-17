@@ -73,6 +73,13 @@ const SNAPCHAT_TRANSCRIPT_MARKERS = ['TEXT', 'MEDIA', 'CALL', 'NOTE'] as const
 const EMBEDDED_TRANSCRIPT_PATTERN =
   /UTC(Saved|Opened|Received|Delivered|Sent)([A-Za-z0-9._-]{2,40})(TEXT|MEDIA|CALL|NOTE)/g
 
+type ParseProgress = {
+  percent: number
+  label: string
+}
+
+type ParseProgressHandler = (progress: ParseProgress) => void
+
 function slugify(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, '-')
 }
@@ -124,9 +131,47 @@ function sanitizeContactCandidate(value: string | null, path: string) {
 
 function normalizeHtmlLine(line: string) {
   return line
+    .replace(/<[^>]+>/g, ' ')
     .replace(/\u00a0/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
+}
+
+function looksLikeStructuredBlob(value: string) {
+  const compact = value.replace(/\s+/g, ' ').trim()
+  if (!compact) {
+    return false
+  }
+
+  return (
+    /<\/?[a-z][^>]*>/i.test(compact) ||
+    (/^[[{]/.test(compact) && /[:",]/.test(compact)) ||
+    /\b(function|const|let|var|return|document\.|window\.|className|querySelector)\b/.test(compact) ||
+    /"[\w.-]+"\s*:/.test(compact) ||
+    compact.includes('{"') ||
+    compact.includes('":["')
+  )
+}
+
+function sanitizeReadableText(value: string | null) {
+  if (!value) {
+    return null
+  }
+
+  const normalized = normalizeHtmlLine(value)
+  if (!normalized) {
+    return null
+  }
+
+  if (HTML_NOISE_TERMS.has(normalized.toLowerCase())) {
+    return null
+  }
+
+  if (looksLikeStructuredBlob(normalized)) {
+    return null
+  }
+
+  return normalized
 }
 
 function isNoiseHtmlLine(line: string) {
@@ -525,9 +570,12 @@ function parseHtml(content: string): FlatRecord[] {
 
   return [...document.querySelectorAll('li,p,h1,h2,h3,h4,div')]
     .map((node, index) => ({
-      [`line_${index + 1}`]: normalizeHtmlLine(node.textContent ?? '') || null,
+      [`line_${index + 1}`]: sanitizeReadableText(node.textContent ?? ''),
     }))
-    .filter((record) => Object.values(record)[0])
+    .filter((record) => {
+      const value = Object.values(record)[0]
+      return typeof value === 'string' && value.length >= 2
+    })
 }
 
 function parseJson(content: string): FlatRecord[] {
@@ -570,8 +618,23 @@ function parseByExtension(path: string, content: string) {
   return parseTxt(content)
 }
 
-async function fileToText(file: File) {
-  return file.text()
+async function fileToText(file: File, onProgress?: (percent: number) => void) {
+  if (!onProgress) {
+    return file.text()
+  }
+
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader()
+
+    reader.addEventListener('progress', (event) => {
+      if (event.lengthComputable) {
+        onProgress((event.loaded / event.total) * 100)
+      }
+    })
+    reader.addEventListener('load', () => resolve(String(reader.result ?? '')))
+    reader.addEventListener('error', () => reject(reader.error ?? new Error('File read failed.')))
+    reader.readAsText(file)
+  })
 }
 
 function pickString(record: FlatRecord, needles: string[]) {
@@ -699,12 +762,7 @@ function pickEventText(record: FlatRecord) {
     return null
   }
 
-  const normalized = candidate.toLowerCase()
-  if (HTML_NOISE_TERMS.has(normalized)) {
-    return null
-  }
-
-  return candidate
+  return sanitizeReadableText(candidate)
 }
 
 function normalizeEvent(
@@ -775,7 +833,10 @@ function enrichAccount(account: AccountProfile, record: FlatRecord) {
   return next
 }
 
-export async function parseSnapchatZip(file: File): Promise<ParsedUpload> {
+export async function parseSnapchatZip(
+  file: File,
+  onProgress?: ParseProgressHandler,
+): Promise<ParsedUpload> {
   const uploadId = slugify(`${file.name}-${file.lastModified}`)
   const zip = await JSZip.loadAsync(file)
   const events: NormalizedEvent[] = []
@@ -786,10 +847,25 @@ export async function parseSnapchatZip(file: File): Promise<ParsedUpload> {
   const allEntries = Object.values(zip.files).filter((entry) => !entry.dir)
   const supportedEntries = allEntries.filter((entry) => hasSupportedExtension(entry.name))
   const skippedMediaEntries = allEntries.filter((entry) => isMediaExtension(entry.name))
+  const totalSteps = Math.max(supportedEntries.length + 1, 1)
+  let completedSteps = 0
+
+  onProgress?.({
+    percent: 5,
+    label: `Opened zip with ${supportedEntries.length} supported file${supportedEntries.length === 1 ? '' : 's'}.`,
+  })
 
   for (const entry of supportedEntries) {
     try {
-      const content = await entry.async('text')
+      const content = await entry.async('text', (metadata) => {
+        onProgress?.({
+          percent: Math.min(
+            95,
+            ((completedSteps + metadata.percent / 100) / totalSteps) * 100,
+          ),
+          label: `Parsing ${entry.name} (${Math.round(metadata.percent)}%)`,
+        })
+      })
       const records = parseByExtension(entry.name, content)
       const category = detectCategory(entry.name, records)
       const normalized = records
@@ -823,10 +899,20 @@ export async function parseSnapchatZip(file: File): Promise<ParsedUpload> {
         rows: normalized.length,
         supported: true,
       })
+      completedSteps += 1
+      onProgress?.({
+        percent: Math.min(95, (completedSteps / totalSteps) * 100),
+        label: `Parsed ${completedSteps} of ${supportedEntries.length} supported files.`,
+      })
     } catch (error) {
       warnings.push(
         `Could not parse ${entry.name}: ${error instanceof Error ? error.message : 'unknown error'}`,
       )
+      completedSteps += 1
+      onProgress?.({
+        percent: Math.min(95, (completedSteps / totalSteps) * 100),
+        label: `Parsed ${completedSteps} of ${supportedEntries.length} supported files.`,
+      })
     }
   }
 
@@ -868,6 +954,11 @@ export async function parseSnapchatZip(file: File): Promise<ParsedUpload> {
     )
   }
 
+  onProgress?.({
+    percent: 94,
+    label: `Zip parse finished with ${events.length} normalized rows. Building thread index...`,
+  })
+
   return {
     upload,
     fileSummaries: fileSummaries.sort((left, right) => right.rows - left.rows),
@@ -883,7 +974,10 @@ export async function parseSnapchatZip(file: File): Promise<ParsedUpload> {
   }
 }
 
-export async function parseSnapchatFileList(files: File[]): Promise<ParsedUpload> {
+export async function parseSnapchatFileList(
+  files: File[],
+  onProgress?: ParseProgressHandler,
+): Promise<ParsedUpload> {
   const uploadId = slugify(`folder-${files[0]?.name ?? 'export'}-${Date.now()}`)
   const warnings: string[] = []
   const fileSummaries: FileSummary[] = []
@@ -894,12 +988,19 @@ export async function parseSnapchatFileList(files: File[]): Promise<ParsedUpload
     hasSupportedExtension(file.webkitRelativePath || file.name),
   )
   const skippedMedia = files.filter((file) => isMediaExtension(file.webkitRelativePath || file.name))
+  const totalSteps = Math.max(supportedFiles.length, 1)
+  let completedSteps = 0
 
   for (const file of supportedFiles) {
     const path = file.webkitRelativePath || file.name
 
     try {
-      const content = await fileToText(file)
+      const content = await fileToText(file, (filePercent) => {
+        onProgress?.({
+          percent: ((completedSteps + filePercent / 100) / totalSteps) * 100,
+          label: `Reading ${completedSteps + 1} of ${supportedFiles.length} supported files.`,
+        })
+      })
       const records = parseByExtension(path, content)
       const category = detectCategory(path, records)
       const normalized = records
@@ -937,6 +1038,12 @@ export async function parseSnapchatFileList(files: File[]): Promise<ParsedUpload
       warnings.push(
         `Could not parse ${path}: ${error instanceof Error ? error.message : 'unknown error'}`,
       )
+    } finally {
+      completedSteps += 1
+      onProgress?.({
+        percent: (completedSteps / totalSteps) * 100,
+        label: `Parsed ${completedSteps} of ${supportedFiles.length} supported files.`,
+      })
     }
   }
 
@@ -964,6 +1071,11 @@ export async function parseSnapchatFileList(files: File[]): Promise<ParsedUpload
       `Skipped ${skippedMedia.length} media file${skippedMedia.length === 1 ? '' : 's'} and parsed the remaining text data directly from the extracted export folder.`,
     )
   }
+
+  onProgress?.({
+    percent: 94,
+    label: `Folder parse finished with ${events.length} normalized rows. Building thread index...`,
+  })
 
   return {
     upload: {

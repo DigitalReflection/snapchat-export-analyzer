@@ -194,6 +194,44 @@ function preserveBodyText(value: string | null | undefined) {
     .trim()
 }
 
+function formatPlainConversationText(value: string | null | undefined) {
+  if (!value) return ''
+
+  const normalized = value
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\u00a0/g, ' ')
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+
+  if (!normalized) return ''
+
+  const looksStructured =
+    (/^[[{]/.test(normalized) && /[:",]/.test(normalized)) ||
+    /"[\w.-]+"\s*:/.test(normalized) ||
+    /\b(function|const|let|var|return|document\.|window\.|querySelector)\b/.test(normalized)
+
+  if (looksStructured) {
+    try {
+      const parsed = JSON.parse(normalized) as Record<string, unknown>
+      const candidate = ['message', 'text', 'body', 'content', 'caption', 'savedchat']
+        .map((key) => parsed[key])
+        .find((entry) => typeof entry === 'string' && entry.trim())
+
+      if (typeof candidate === 'string') {
+        return preserveBodyText(candidate)
+      }
+    } catch {
+      return ''
+    }
+    return ''
+  }
+
+  return preserveBodyText(normalized)
+}
+
 function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
@@ -254,6 +292,10 @@ function eventSummaryText(event: NormalizedEvent) {
   }
 
   return preserveBodyText(event.evidenceText) || 'No visible text for this row.'
+}
+
+function eventConversationText(event: NormalizedEvent) {
+  return formatPlainConversationText(event.text)
 }
 
 function sortedDatedEvents(events: NormalizedEvent[]) {
@@ -364,6 +406,7 @@ function ConversationList(props: {
   events: NormalizedEvent[]
   onEventClick: (eventId: string) => void
   terms: string[]
+  plainTextOnly?: boolean
 }) {
   return (
     <div className="conversation-list">
@@ -373,6 +416,8 @@ function ConversationList(props: {
           props.events[index - 1]?.timestamp?.slice(0, 10) ?? `undated-${props.events[index - 1]?.id ?? 'start'}`
         const showDay = index === 0 || dayKey !== previousDayKey
         const role = resolveConversationRole(event, props.aliasIndex)
+
+        const displayText = props.plainTextOnly ? eventConversationText(event) : eventSummaryText(event)
 
         return (
           <div className={`conversation-item role-${role}`} key={event.id}>
@@ -391,7 +436,10 @@ function ConversationList(props: {
                   {extractActorValue(event) ?? (role === 'self' ? 'You' : event.contact ?? 'Unknown')}
                 </span>
                 <span className="message-copy">
-                  <HighlightedText terms={props.terms} text={eventSummaryText(event)} />
+                  <HighlightedText
+                    terms={props.terms}
+                    text={displayText || (props.plainTextOnly ? 'No readable chat text was recovered for this row.' : eventSummaryText(event))}
+                  />
                 </span>
               </div>
               <span className="message-source-line mono">
@@ -533,6 +581,7 @@ export default function App() {
   const [isWorkspaceLoading, setIsWorkspaceLoading] = useState(false)
   const [isLoadingZip, setIsLoadingZip] = useState(false)
   const [isLoadingFolder, setIsLoadingFolder] = useState(false)
+  const [loadProgress, setLoadProgress] = useState({ percent: 0, label: '' })
   const [activeTab, setActiveTab] = useState<ActiveTab>('overview')
   const [notes, setNotes] = useState('')
   const [contactSearch, setContactSearch] = useState('')
@@ -631,6 +680,17 @@ export default function App() {
     [aiSettings],
   )
   useEffect(() => {
+    if (loadProgress.percent < 100 || isLoadingZip || isLoadingFolder || isWorkspaceLoading) {
+      return
+    }
+
+    const timeout = window.setTimeout(() => {
+      setLoadProgress({ percent: 0, label: '' })
+    }, 1400)
+
+    return () => window.clearTimeout(timeout)
+  }, [isLoadingFolder, isLoadingZip, isWorkspaceLoading, loadProgress])
+  useEffect(() => {
     if (isHydrating) return
 
     void saveSnapshot({
@@ -645,6 +705,7 @@ export default function App() {
     const worker = workspaceWorkerRef.current
     if (!worker) {
       setWorkspace(buildWorkspaceLite(uploads))
+      setLoadProgress({ percent: 100, label: 'Thread index ready.' })
       return
     }
 
@@ -652,6 +713,10 @@ export default function App() {
     workspaceRequestRef.current += 1
     setIsWorkspaceLoading(true)
     setWorkspaceError(null)
+    setLoadProgress((current) => ({
+      percent: Math.max(current.percent, 96),
+      label: 'Building contact and thread index...',
+    }))
 
     const handleMessage = (
       event: MessageEvent<{ requestId: string; workspace?: WorkspaceDataset; error?: string }>,
@@ -670,6 +735,7 @@ export default function App() {
 
       if (event.data.workspace) {
         setWorkspace(event.data.workspace)
+        setLoadProgress({ percent: 100, label: 'Thread index ready.' })
       }
     }
 
@@ -772,12 +838,15 @@ export default function App() {
       if (threadMode === 'chat' && event.category !== 'chat') {
         return false
       }
+      if (threadMode === 'chat' && !eventConversationText(event)) {
+        return false
+      }
       if (!threadTerms.length) {
         return true
       }
 
       const haystack = compact(
-        [event.text, event.detail, event.evidenceText, event.sourceFile].filter(Boolean).join(' '),
+        [eventConversationText(event), event.detail, event.evidenceText, event.sourceFile].filter(Boolean).join(' '),
       ).toLowerCase()
 
       return threadTerms.some((term) => haystack.includes(term))
@@ -892,10 +961,24 @@ export default function App() {
     if (!files.length) return
     setIsLoadingZip(true)
     setError(null)
+    setLoadProgress({ percent: 0, label: 'Opening zip export...' })
     setStatus(`Parsing ${files.length} zip upload${files.length === 1 ? '' : 's'}...`)
 
     try {
-      const parsed = await Promise.all(files.map((file) => parseSnapchatZip(file)))
+      const parsed: ParsedUpload[] = []
+
+      for (const [index, file] of files.entries()) {
+        const upload = await parseSnapchatZip(file, (progress) => {
+          const base = (index / files.length) * 100
+          const span = 100 / files.length
+          setLoadProgress({
+            percent: Math.min(100, base + (progress.percent / 100) * span),
+            label: `${file.name}: ${progress.label}`,
+          })
+        })
+        parsed.push(upload)
+      }
+
       startTransition(() => {
         mergeUploads(parsed)
         setActiveTab('overview')
@@ -907,6 +990,9 @@ export default function App() {
       setError(caught instanceof Error ? caught.message : 'Zip parsing failed.')
       setStatus('Zip parsing failed.')
     } finally {
+      setLoadProgress((current) =>
+        current.percent >= 100 ? current : { percent: 0, label: '' },
+      )
       setIsLoadingZip(false)
       event.target.value = ''
     }
@@ -917,10 +1003,11 @@ export default function App() {
     if (!files.length) return
     setIsLoadingFolder(true)
     setError(null)
+    setLoadProgress({ percent: 0, label: 'Scanning extracted export folder...' })
     setStatus('Parsing extracted export folder and skipping media...')
 
     try {
-      const parsed = await parseSnapchatFileList(files)
+      const parsed = await parseSnapchatFileList(files, setLoadProgress)
       startTransition(() => {
         mergeUploads([parsed])
         setActiveTab('overview')
@@ -930,6 +1017,9 @@ export default function App() {
       setError(caught instanceof Error ? caught.message : 'Folder parsing failed.')
       setStatus('Folder parsing failed.')
     } finally {
+      setLoadProgress((current) =>
+        current.percent >= 100 ? current : { percent: 0, label: '' },
+      )
       setIsLoadingFolder(false)
       event.target.value = ''
     }
@@ -940,6 +1030,7 @@ export default function App() {
     if (!file) return
 
     setError(null)
+    setLoadProgress({ percent: 10, label: 'Loading cached workspace JSON...' })
     setStatus(`Loading cached workspace from ${file.name}...`)
 
     try {
@@ -958,6 +1049,7 @@ export default function App() {
 
       setUploads(nextUploads)
       setContactAiResults({})
+      setLoadProgress({ percent: 94, label: 'Cached workspace loaded. Building thread index...' })
       setStatus(`Loaded cached workspace with ${nextUploads.length} upload(s).`)
       setActiveTab('chats')
     } catch (caught) {
@@ -1298,9 +1390,10 @@ export default function App() {
       const modalTerms = queryTermsFromInput(deferredThreadSearch)
       const visibleThread = thread.filter((event) => {
         if (threadMode === 'chat' && event.category !== 'chat') return false
+        if (threadMode === 'chat' && !eventConversationText(event)) return false
         if (!modalTerms.length) return true
         const haystack = compact(
-          [event.text, event.detail, event.evidenceText, event.sourceFile].filter(Boolean).join(' '),
+          [eventConversationText(event), event.detail, event.evidenceText, event.sourceFile].filter(Boolean).join(' '),
         ).toLowerCase()
         return modalTerms.some((term) => haystack.includes(term))
       })
@@ -1456,6 +1549,7 @@ export default function App() {
                   aliasIndex={aliasIndex}
                   events={visibleThreadPage}
                   onEventClick={(eventId) => setModalState({ type: 'event', eventId })}
+                  plainTextOnly={threadMode === 'chat'}
                   terms={modalTerms}
                 />
                 {visibleThread.length === 0 ? (
@@ -1771,9 +1865,15 @@ export default function App() {
             {error ? <p className="error-line">{error}</p> : null}
             {workspaceError ? <p className="error-line">{workspaceError}</p> : null}
             {isWorkspaceLoading ? <p className="loading-line">Loading contacts and thread rows...</p> : null}
-            {isWorkspaceLoading || isLoadingZip || isLoadingFolder ? (
-              <div className="progress-shell" aria-label="Processing progress">
-                <div className="progress-bar indeterminate" />
+            {(isWorkspaceLoading || isLoadingZip || isLoadingFolder || loadProgress.percent > 0) ? (
+              <div className="page-progress-block">
+                <div className="result-meta">
+                  <span>{loadProgress.label || 'Working...'}</span>
+                  <span>{Math.round(loadProgress.percent)}%</span>
+                </div>
+                <div className="progress-shell" aria-label="Processing progress">
+                  <div className="progress-bar" style={{ width: `${clampPercent(loadProgress.percent)}%` }} />
+                </div>
               </div>
             ) : null}
             {requiresAiForDeepReview && !aiSettings.apiKey.trim() ? (
@@ -2241,6 +2341,7 @@ export default function App() {
                         aliasIndex={aliasIndex}
                         events={selectedVisibleThreadPage}
                         onEventClick={(eventId) => setModalState({ type: 'event', eventId })}
+                        plainTextOnly={threadMode === 'chat'}
                         terms={selectedThreadTerms}
                       />
                       {selectedVisibleThread.length === 0 ? (

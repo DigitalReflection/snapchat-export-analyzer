@@ -720,6 +720,12 @@
   background: rgba(14, 24, 36, 0.78);
 }
 
+.page-progress-block {
+  display: grid;
+  gap: 0.45rem;
+  margin-top: 0.65rem;
+}
+
 .raw-block,
 .json-block {
   padding: 0.9rem;
