@@ -28,6 +28,45 @@ const MEDIA_EXTENSIONS = [
   '.wav',
   '.mp3',
 ]
+const GENERIC_CONTACT_TERMS = new Set([
+  'account information',
+  'bitmoji',
+  'chat history',
+  'download my data',
+  'friends',
+  'home',
+  'index',
+  'location',
+  'login history',
+  'memories',
+  'my data',
+  'profiles',
+  'purchase history',
+  'saved chat history',
+  'search history',
+  'snap history',
+  'snapchat support history',
+  'support history',
+])
+const HTML_NOISE_TERMS = new Set([
+  'account',
+  'account information',
+  'bitmoji',
+  'download my data',
+  'friends',
+  'home',
+  'location',
+  'login history and account information',
+  'memories',
+  'my data',
+  'purchase & shop history',
+  'saved chat history',
+  'search history',
+  'snap history',
+  'snapchat support history',
+  'support history',
+  'user & public profiles',
+])
 
 function slugify(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, '-')
@@ -50,6 +89,133 @@ function hasSupportedExtension(path: string) {
 
 function isMediaExtension(path: string) {
   return MEDIA_EXTENSIONS.includes(extensionOf(path))
+}
+
+function sanitizeContactCandidate(value: string | null, path: string) {
+  if (!value) {
+    return null
+  }
+
+  const trimmed = value
+    .replace(/\.[^.]+$/, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  if (!trimmed) {
+    return null
+  }
+
+  const lower = trimmed.toLowerCase()
+  if (GENERIC_CONTACT_TERMS.has(lower)) {
+    return null
+  }
+
+  if (lower === baseName(path).toLowerCase() && GENERIC_CONTACT_TERMS.has(lower)) {
+    return null
+  }
+
+  return trimmed
+}
+
+function normalizeHtmlLine(line: string) {
+  return line
+    .replace(/\u00a0/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function isNoiseHtmlLine(line: string) {
+  const normalized = normalizeHtmlLine(line)
+  if (!normalized) {
+    return true
+  }
+
+  const lower = normalized.toLowerCase()
+  if (HTML_NOISE_TERMS.has(lower)) {
+    return true
+  }
+
+  if (lower.length < 2) {
+    return true
+  }
+
+  return false
+}
+
+function extractTimestampFragment(value: string) {
+  const patterns = [
+    /\b\d{4}-\d{2}-\d{2}(?:[ t]\d{1,2}:\d{2}(?::\d{2})?(?:\.\d+)?(?: ?(?:am|pm))?(?: ?(?:z|utc|gmt|[+-]\d{2}:?\d{2}))?)?\b/i,
+    /\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}(?:,? \d{1,2}:\d{2}(?::\d{2})?(?: ?[ap]m)?)?\b/i,
+    /\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]* \d{1,2},? \d{2,4}(?:,? \d{1,2}:\d{2}(?::\d{2})?(?: ?[ap]m)?)?\b/i,
+  ]
+
+  for (const pattern of patterns) {
+    const match = value.match(pattern)
+    if (match?.[0]) {
+      return match[0]
+    }
+  }
+
+  return null
+}
+
+function buildHtmlLineRecords(content: string) {
+  const rawLines = content.split(/\r?\n/).map((line) => normalizeHtmlLine(line))
+  const lines = rawLines.filter((line, index) => {
+    if (isNoiseHtmlLine(line)) {
+      return false
+    }
+
+    return line !== rawLines[index - 1]
+  })
+
+  const records: FlatRecord[] = []
+  let pendingTimestamp: string | null = null
+
+  lines.forEach((line, index) => {
+    const record: FlatRecord = {
+      line,
+      row: index + 1,
+    }
+
+    const timestamp = extractTimestampFragment(line)
+    if (timestamp) {
+      record.timestamp = timestamp
+      const withoutTimestamp = normalizeHtmlLine(line.replace(timestamp, ''))
+      if (withoutTimestamp) {
+        record.line = withoutTimestamp
+      } else {
+        pendingTimestamp = timestamp
+        return
+      }
+    } else if (pendingTimestamp) {
+      record.timestamp = pendingTimestamp
+      pendingTimestamp = null
+    }
+
+    const pairMatch = record.line && String(record.line).match(/^([A-Za-z][A-Za-z _-]{1,32}):\s+(.+)$/)
+    if (pairMatch) {
+      const key = pairMatch[1].trim().toLowerCase().replace(/\s+/g, '_')
+      const value = pairMatch[2].trim()
+      record[key] = value
+      if (['sender', 'from', 'to', 'contact', 'friend', 'participant', 'recipient', 'name'].includes(key)) {
+        record.contact = value
+      }
+      if (['message', 'chat', 'text', 'body', 'caption', 'content'].includes(key)) {
+        record.message = value
+      }
+    } else {
+      const chatLike = String(record.line).match(/^([^:]{2,48}):\s+(.+)$/)
+      if (chatLike) {
+        record.contact = chatLike[1].trim()
+        record.message = chatLike[2].trim()
+      }
+    }
+
+    records.push(record)
+  })
+
+  return records
 }
 
 function detectCategory(path: string, records: FlatRecord[]): DataCategory {
@@ -219,32 +385,36 @@ function parseCsv(content: string): FlatRecord[] {
 function parseHtml(content: string): FlatRecord[] {
   const document = new DOMParser().parseFromString(content, 'text/html')
   const tables = [...document.querySelectorAll('table')]
+  const tableRecords = tables.flatMap((table) => {
+    const rows = [...table.querySelectorAll('tr')]
+    if (rows.length < 2) {
+      return []
+    }
 
-  if (tables.length > 0) {
-    return tables.flatMap((table) => {
-      const rows = [...table.querySelectorAll('tr')]
-      if (rows.length < 2) {
-        return []
-      }
+    const headers = [...rows[0].querySelectorAll('th,td')].map((cell, index) =>
+      cell.textContent?.trim() || `column_${index + 1}`,
+    )
 
-      const headers = [...rows[0].querySelectorAll('th,td')].map((cell, index) =>
-        cell.textContent?.trim() || `column_${index + 1}`,
-      )
+    return rows.slice(1).map((row) =>
+      Object.fromEntries(
+        headers.map((header, index) => [
+          header,
+          row.querySelectorAll('td,th')[index]?.textContent?.trim() || null,
+        ]),
+      ),
+    )
+  })
 
-      return rows.slice(1).map((row) =>
-        Object.fromEntries(
-          headers.map((header, index) => [
-            header,
-            row.querySelectorAll('td,th')[index]?.textContent?.trim() || null,
-          ]),
-        ),
-      )
-    })
+  const fallbackRecords = buildHtmlLineRecords(document.body?.innerText ?? '')
+  const combined = [...tableRecords, ...fallbackRecords]
+
+  if (combined.length > 0) {
+    return combined
   }
 
-  return [...document.querySelectorAll('li,p')]
+  return [...document.querySelectorAll('li,p,h1,h2,h3,h4,div')]
     .map((node, index) => ({
-      [`line_${index + 1}`]: node.textContent?.trim() || null,
+      [`line_${index + 1}`]: normalizeHtmlLine(node.textContent ?? '') || null,
     }))
     .filter((record) => Object.values(record)[0])
 }
@@ -323,7 +493,7 @@ function derivePathContact(path: string) {
     return null
   }
 
-  return normalized
+  return sanitizeContactCandidate(normalized, path)
 }
 
 function normalizeTimestamp(value: string | null) {
@@ -331,10 +501,11 @@ function normalizeTimestamp(value: string | null) {
     return null
   }
 
+  const extracted = extractTimestampFragment(value) ?? value
   const numeric = Number(value)
   const date = Number.isFinite(numeric)
-    ? new Date(value.length >= 13 ? numeric : numeric * 1000)
-    : new Date(value)
+    ? new Date(String(value).length >= 13 ? numeric : numeric * 1000)
+    : new Date(extracted)
 
   return Number.isNaN(date.getTime()) ? null : date.toISOString()
 }
@@ -356,7 +527,8 @@ function eventEvidenceText(record: FlatRecord) {
 
 function pickContact(record: FlatRecord, category: DataCategory, path: string) {
   const direct =
-    pickString(record, [
+    sanitizeContactCandidate(
+      pickString(record, [
       'friend',
       'contact',
       'display_name',
@@ -370,16 +542,18 @@ function pickContact(record: FlatRecord, category: DataCategory, path: string) {
       'friend_name',
       'recipient_name',
     ]) ??
-    pickString(record, ['username', 'user', 'handle'])
+        pickString(record, ['username', 'user', 'handle']),
+      path,
+    )
 
   if (direct) {
     return direct
   }
 
   if (category === 'chat' || category === 'friend' || category === 'search') {
-    return (
-      pickString(record, ['name', 'conversation', 'title']) ??
-      derivePathContact(path)
+    return sanitizeContactCandidate(
+      pickString(record, ['name', 'conversation', 'title']) ?? derivePathContact(path),
+      path,
     )
   }
 
@@ -387,7 +561,7 @@ function pickContact(record: FlatRecord, category: DataCategory, path: string) {
 }
 
 function pickEventText(record: FlatRecord) {
-  return pickString(record, [
+  const candidate = pickString(record, [
     'message',
     'chat',
     'content',
@@ -401,6 +575,17 @@ function pickEventText(record: FlatRecord) {
     'title',
     'note',
   ])
+
+  if (!candidate) {
+    return null
+  }
+
+  const normalized = candidate.toLowerCase()
+  if (HTML_NOISE_TERMS.has(normalized)) {
+    return null
+  }
+
+  return candidate
 }
 
 function normalizeEvent(

@@ -50,7 +50,8 @@
 .settings-grid,
 .contact-summary-grid,
 .filter-grid,
-.modal-grid {
+.modal-grid,
+.detail-duo-grid {
   display: grid;
   gap: 1rem;
 }
@@ -349,6 +350,18 @@
   gap: 0.9rem;
 }
 
+.detail-duo-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.thread-header-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: center;
+  margin-bottom: 0.7rem;
+}
+
 .mini-stat,
 .subpanel,
 .modal-card,
@@ -395,6 +408,10 @@
   padding-right: 0.2rem;
 }
 
+.main-thread-scroll {
+  max-height: 48vh;
+}
+
 .contact-table {
   max-height: 70vh;
   padding-right: 0.15rem;
@@ -412,6 +429,10 @@
 
 .compact-stack {
   gap: 0.55rem;
+}
+
+.media-stack {
+  margin-top: 0.85rem;
 }
 
 .result-meta {
@@ -570,7 +591,8 @@ mark {
   .chat-layout,
   .contact-modal-grid,
   .dashboard-grid,
-  .modal-grid.two-column {
+  .modal-grid.two-column,
+  .detail-duo-grid {
     grid-template-columns: 1fr;
   }
 }
@@ -594,6 +616,7 @@ mark {
   .modal-header,
   .section-heading,
   .thread-toolbar,
+  .thread-header-row,
   .modal-toolbar,
   .list-head,
   .message-meta,

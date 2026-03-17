@@ -91,6 +91,12 @@ const TAB_LABELS: Array<{ id: ActiveTab; label: string }> = [
   { id: 'ai', label: 'AI' },
   { id: 'data', label: 'Data' },
 ]
+const MEDIA_DETAIL_PATTERN = /\.(?:jpe?g|png|gif|heic|mp4|mov|webm|avi|mkv)$/i
+
+type ContactDateMarker = {
+  label: string
+  event: NormalizedEvent
+}
 
 function formatDate(value: string | null) {
   if (!value) return 'Unknown'
@@ -151,6 +157,80 @@ function hasDeletionIndicator(event: NormalizedEvent) {
   ).toLowerCase()
 
   return DELETION_TERMS.some((term) => haystack.includes(term))
+}
+
+function isMediaEvent(event: NormalizedEvent) {
+  const haystack = compact(
+    [event.text, event.detail, event.subtype, event.evidenceText, event.sourceFile]
+      .filter(Boolean)
+      .join(' '),
+  )
+
+  return (
+    event.category === 'memory' ||
+    MEDIA_DETAIL_PATTERN.test(haystack) ||
+    /\b(photo|video|media|image|snap)\b/i.test(haystack)
+  )
+}
+
+function eventSummaryText(event: NormalizedEvent) {
+  return compact(event.text ?? event.detail ?? event.locationName ?? event.evidenceText) || 'No visible text for this row.'
+}
+
+function sortedDatedEvents(events: NormalizedEvent[]) {
+  return [...events]
+    .filter((event) => Boolean(event.timestamp))
+    .sort((left, right) => (left.timestamp && right.timestamp ? left.timestamp.localeCompare(right.timestamp) : 0))
+}
+
+function buildDateMarkers(events: NormalizedEvent[]) {
+  const dated = sortedDatedEvents(events)
+  const definitions: Array<{
+    firstLabel: string
+    lastLabel: string
+    predicate: (event: NormalizedEvent) => boolean
+  }> = [
+    {
+      firstLabel: 'First activity',
+      lastLabel: 'Last activity',
+      predicate: () => true,
+    },
+    {
+      firstLabel: 'First message',
+      lastLabel: 'Last message',
+      predicate: (event) => event.category === 'chat',
+    },
+    {
+      firstLabel: 'First search',
+      lastLabel: 'Last search',
+      predicate: (event) => event.category === 'search',
+    },
+    {
+      firstLabel: 'First friend row',
+      lastLabel: 'Last friend row',
+      predicate: (event) => event.category === 'friend',
+    },
+    {
+      firstLabel: 'First photo/video row',
+      lastLabel: 'Last photo/video row',
+      predicate: (event) => isMediaEvent(event),
+    },
+  ]
+
+  return definitions.flatMap(({ firstLabel, lastLabel, predicate }) => {
+    const matches = dated.filter(predicate)
+    if (!matches.length) {
+      return []
+    }
+
+    const markers: ContactDateMarker[] = [{ label: firstLabel, event: matches[0] }]
+    if (matches.length > 1) {
+      markers.push({ label: lastLabel, event: matches[matches.length - 1] })
+    } else {
+      markers.push({ label: lastLabel, event: matches[0] })
+    }
+    return markers
+  })
 }
 
 function scoreLabel(score: number) {
@@ -412,11 +492,42 @@ export default function App() {
   const selectedSummary =
     contactIndex.get(selectedContact) ?? filteredContacts[0] ?? workspace.contacts[0] ?? null
 
-  const selectedPreviewEvents = useMemo(() => {
+  const selectedThread = useMemo(() => {
     if (!selectedSummary) return []
-    const thread = eventsByContact.get(selectedSummary.name) ?? []
-    return [...thread].filter((event) => event.category === 'chat').slice(-6).reverse()
+    return eventsByContact.get(selectedSummary.name) ?? []
   }, [eventsByContact, selectedSummary])
+
+  const selectedVisibleThread = useMemo(() => {
+    const threadTerms = queryTermsFromInput(deferredThreadSearch)
+    return selectedThread.filter((event) => {
+      if (threadMode === 'chat' && event.category !== 'chat') {
+        return false
+      }
+      if (!threadTerms.length) {
+        return true
+      }
+
+      const haystack = compact(
+        [event.text, event.detail, event.evidenceText, event.sourceFile].filter(Boolean).join(' '),
+      ).toLowerCase()
+
+      return threadTerms.some((term) => haystack.includes(term))
+    })
+  }, [deferredThreadSearch, selectedThread, threadMode])
+
+  const selectedDateMarkers = useMemo(() => buildDateMarkers(selectedThread), [selectedThread])
+  const selectedMediaEvents = useMemo(
+    () => selectedThread.filter((event) => isMediaEvent(event)),
+    [selectedThread],
+  )
+  const selectedSourceFiles = useMemo(
+    () => [...new Set(selectedThread.map((event) => event.sourceFile))].slice(0, 10),
+    [selectedThread],
+  )
+  const selectedMarkerMap = useMemo(
+    () => Object.fromEntries(selectedDateMarkers.map((marker) => [marker.label, marker.event])),
+    [selectedDateMarkers],
+  )
 
   const searchTerms = useMemo(() => queryTermsFromInput(deferredSearchQuery), [deferredSearchQuery])
   const searchHits = useMemo(() => {
@@ -546,6 +657,7 @@ export default function App() {
   function openContactModal(contactName: string) {
     setSelectedContact(contactName)
     setThreadSearch('')
+    setThreadMode('chat')
     setModalState({ type: 'contact', contactName })
   }
 
@@ -771,6 +883,8 @@ export default function App() {
       const summary = contactIndex.get(modalState.contactName)
       if (!summary) return null
       const thread = eventsByContact.get(summary.name) ?? []
+      const dateMarkers = buildDateMarkers(thread)
+      const mediaEvents = thread.filter((event) => isMediaEvent(event))
       const modalTerms = queryTermsFromInput(deferredThreadSearch)
       const visibleThread = thread.filter((event) => {
         if (threadMode === 'chat' && event.category !== 'chat') return false
@@ -838,8 +952,11 @@ export default function App() {
                     on {summary.peakWeekday ?? 'Unknown'}.
                   </li>
                   <li>Deletion indicators: {summary.deletionIndicators}.</li>
-                  <li>First seen {formatDate(summary.firstSeen)}.</li>
-                  <li>Last seen {formatDate(summary.lastSeen)}.</li>
+                  <li>First activity {formatDate(dateMarkers.find((marker) => marker.label === 'First activity')?.event.timestamp ?? null)}.</li>
+                  <li>Last activity {formatDate(dateMarkers.find((marker) => marker.label === 'Last activity')?.event.timestamp ?? null)}.</li>
+                  <li>First message {formatDate(dateMarkers.find((marker) => marker.label === 'First message')?.event.timestamp ?? null)}.</li>
+                  <li>Last message {formatDate(dateMarkers.find((marker) => marker.label === 'Last message')?.event.timestamp ?? null)}.</li>
+                  <li>Photo/video rows {mediaEvents.length}.</li>
                 </ul>
               </article>
               <article className="modal-card">
@@ -925,9 +1042,6 @@ export default function App() {
 
               <div className="thread-scroll">
                 {visibleThread.map((event) => {
-                  const excerpt =
-                    compact(event.text ?? event.detail ?? event.evidenceText) ||
-                    'No visible text for this row.'
                   return (
                     <button
                       className="message-row"
@@ -940,7 +1054,7 @@ export default function App() {
                         <span>{formatDate(event.timestamp)}</span>
                       </div>
                       <p>
-                        <HighlightedText terms={modalTerms} text={excerpt} />
+                        <HighlightedText terms={modalTerms} text={eventSummaryText(event)} />
                       </p>
                       <span className="mono">
                         [{event.id}] {event.sourceFile}
@@ -1410,7 +1524,11 @@ export default function App() {
                   <button
                     className={selectedSummary?.name === contact.name ? 'contact-row active' : 'contact-row'}
                     key={contact.name}
-                    onClick={() => setSelectedContact(contact.name)}
+                    onClick={() => {
+                      setSelectedContact(contact.name)
+                      setThreadSearch('')
+                      setThreadMode('chat')
+                    }}
                     type="button"
                   >
                     <div className="contact-row-main">
@@ -1440,31 +1558,35 @@ export default function App() {
                   ) : null
                 }
                 eyebrow="Selected contact"
-                subtitle="Compact preview. Open the thread modal for the complete chat and raw rows."
+                subtitle="Click a contact to load the full parsed thread here. Every row stays clickable for raw detail."
                 title={selectedSummary?.name ?? 'Choose a contact'}
               />
               {selectedSummary ? (
                 <>
                   <div className="contact-summary-grid">
                     <article className="mini-stat">
+                      <span>Linked rows</span>
+                      <strong>{selectedThread.length}</strong>
+                    </article>
+                    <article className="mini-stat">
                       <span>Messages</span>
                       <strong>{selectedSummary.messageCount}</strong>
                     </article>
                     <article className="mini-stat">
-                      <span>Active days</span>
-                      <strong>{selectedSummary.activeDays}</strong>
+                      <span>First message</span>
+                      <strong>{formatDay(selectedMarkerMap['First message']?.timestamp ?? null)}</strong>
                     </article>
                     <article className="mini-stat">
-                      <span>Peak time</span>
-                      <strong>
-                        {selectedSummary.peakHour !== null
-                          ? `${selectedSummary.peakHour.toString().padStart(2, '0')}:00`
-                          : 'Unknown'}
-                      </strong>
+                      <span>Last message</span>
+                      <strong>{formatDay(selectedMarkerMap['Last message']?.timestamp ?? null)}</strong>
                     </article>
                     <article className="mini-stat">
-                      <span>Missing thread</span>
-                      <strong>{selectedSummary.missingChat ? 'Yes' : 'No'}</strong>
+                      <span>First activity</span>
+                      <strong>{formatDay(selectedMarkerMap['First activity']?.timestamp ?? null)}</strong>
+                    </article>
+                    <article className="mini-stat">
+                      <span>Last activity</span>
+                      <strong>{formatDay(selectedMarkerMap['Last activity']?.timestamp ?? null)}</strong>
                     </article>
                   </div>
 
@@ -1488,31 +1610,123 @@ export default function App() {
                   </div>
 
                   <article className="subpanel">
-                    <h3>Recent visible messages</h3>
-                    <div className="stack-list scroll-stack short-scroll">
-                      {selectedPreviewEvents.map((event) => (
+                    <div className="thread-header-row">
+                      <h3>Parsed thread</h3>
+                      <div className="button-row">
                         <button
-                          className="list-button"
+                          className={threadMode === 'chat' ? 'tab-button active' : 'tab-button'}
+                          onClick={() => setThreadMode('chat')}
+                          type="button"
+                        >
+                          Chat only
+                        </button>
+                        <button
+                          className={threadMode === 'all' ? 'tab-button active' : 'tab-button'}
+                          onClick={() => setThreadMode('all')}
+                          type="button"
+                        >
+                          All linked rows
+                        </button>
+                      </div>
+                    </div>
+                    <label className="search-field inline-search">
+                      <span>Find inside this thread</span>
+                      <input
+                        onChange={(event) => setThreadSearch(event.target.value)}
+                        placeholder="Name, phrase, address, delete..."
+                        type="search"
+                        value={threadSearch}
+                      />
+                    </label>
+                    <div className="thread-scroll main-thread-scroll">
+                      {selectedVisibleThread.map((event) => (
+                        <button
+                          className="message-row"
                           key={event.id}
                           onClick={() => setModalState({ type: 'event', eventId: event.id })}
                           type="button"
                         >
-                          <div className="list-head">
-                            <strong>{formatDate(event.timestamp)}</strong>
-                            <span>{event.category}</span>
+                          <div className="message-meta">
+                            <span className="message-type">{event.category}</span>
+                            <span>{formatDate(event.timestamp)}</span>
                           </div>
-                          <p>{compact(event.text ?? event.detail ?? event.evidenceText)}</p>
+                          <p>{eventSummaryText(event)}</p>
+                          <span className="mono">
+                            [{event.id}] {event.sourceFile}
+                          </span>
                         </button>
                       ))}
-                      {selectedPreviewEvents.length === 0 ? <p className="empty-state">No recent chat rows available.</p> : null}
+                      {selectedVisibleThread.length === 0 ? (
+                        <p className="empty-state">No parsed rows matched this thread view.</p>
+                      ) : null}
                     </div>
                   </article>
+
+                  <div className="detail-duo-grid">
+                    <article className="subpanel">
+                      <h3>First and last markers</h3>
+                      <div className="stack-list compact-stack">
+                        {selectedDateMarkers.map((marker) => (
+                          <button
+                            className="list-button"
+                            key={`${marker.label}-${marker.event.id}`}
+                            onClick={() => setModalState({ type: 'event', eventId: marker.event.id })}
+                            type="button"
+                          >
+                            <div className="list-head">
+                              <strong>{marker.label}</strong>
+                              <span>{formatDate(marker.event.timestamp)}</span>
+                            </div>
+                            <p>{eventSummaryText(marker.event)}</p>
+                          </button>
+                        ))}
+                        {selectedDateMarkers.length === 0 ? (
+                          <p className="empty-state">No dated rows were recovered for this contact.</p>
+                        ) : null}
+                      </div>
+                    </article>
+
+                    <article className="subpanel">
+                      <h3>Photo and media dates</h3>
+                      <div className="entity-grid compact">
+                        {selectedSourceFiles.map((source) => (
+                          <span className="outline-pill" key={source}>
+                            {source}
+                          </span>
+                        ))}
+                      </div>
+                      <div className="stack-list compact-stack media-stack">
+                        {selectedMediaEvents.map((event) => (
+                          <button
+                            className="list-button"
+                            key={event.id}
+                            onClick={() => setModalState({ type: 'event', eventId: event.id })}
+                            type="button"
+                          >
+                            <div className="list-head">
+                              <strong>{formatDate(event.timestamp)}</strong>
+                              <span>{event.category}</span>
+                            </div>
+                            <p>{eventSummaryText(event)}</p>
+                          </button>
+                        ))}
+                        {selectedMediaEvents.length === 0 ? (
+                          <p className="empty-state">No contact-linked photo or media rows were recovered from the current export.</p>
+                        ) : null}
+                      </div>
+                    </article>
+                  </div>
 
                   <article className="subpanel">
                     <h3>Missing thread candidates</h3>
                     <div className="stack-list compact-stack">
                       {missingChatContacts.slice(0, 5).map((contact) => (
-                        <button className="list-button" key={contact.name} onClick={() => openContactModal(contact.name)} type="button">
+                        <button
+                          className="list-button"
+                          key={contact.name}
+                          onClick={() => openContactModal(contact.name)}
+                          type="button"
+                        >
                           <div className="list-head">
                             <strong>{contact.name}</strong>
                             <span>{contact.searchCount} search / {contact.friendEventCount} friend</span>
@@ -1520,7 +1734,9 @@ export default function App() {
                           <p>No chat rows were recovered for this contact.</p>
                         </button>
                       ))}
-                      {missingChatContacts.length === 0 ? <p className="empty-state">No missing-thread contacts detected.</p> : null}
+                      {missingChatContacts.length === 0 ? (
+                        <p className="empty-state">No missing-thread contacts detected.</p>
+                      ) : null}
                     </div>
                   </article>
                 </>
