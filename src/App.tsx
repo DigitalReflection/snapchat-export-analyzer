@@ -19,7 +19,7 @@ const AI_SETTINGS_KEY = 'export-viewer-pro-ai-settings'
 const CONTACT_LABELS_KEY = 'export-viewer-pro-contact-labels'
 const DEFAULT_MODELS: Record<AIProvider, string> = {
   gemini: 'gemini-2.5-flash',
-  openai: 'gpt-4.1-mini',
+  openai: 'gpt-4.1-nano',
 }
 const SUPPORTED_EXPORT_AREAS = [
   'Profiles',

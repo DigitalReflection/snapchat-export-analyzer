@@ -1,5 +1,13 @@
 import type { AIResult, AISettings, WorkspaceDataset } from '../types'
 
+type APIErrorPayload = {
+  error?: {
+    message?: string
+    type?: string
+    code?: string
+  }
+}
+
 function buildContext(workspace: WorkspaceDataset) {
   return {
     uploads: workspace.uploads.map((upload) => ({
@@ -142,25 +150,80 @@ function extractGeminiText(payload: unknown) {
   )
 }
 
-async function runOpenAI(settings: AISettings, prompt: string) {
-  const response = await fetch('https://api.openai.com/v1/responses', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${settings.apiKey}`,
-    },
-    body: JSON.stringify({
-      model: settings.model,
-      input: prompt,
-    }),
-  })
+function delay(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms))
+}
 
-  if (!response.ok) {
-    throw new Error(`OpenAI request failed: ${response.status} ${response.statusText}`)
+async function parseErrorPayload(response: Response) {
+  try {
+    return (await response.json()) as APIErrorPayload
+  } catch {
+    return {}
+  }
+}
+
+function buildOpenAIErrorMessage(status: number, payload: APIErrorPayload) {
+  const message = payload.error?.message?.trim()
+  const code = payload.error?.code
+  const type = payload.error?.type
+
+  if (status === 429 && code === 'insufficient_quota') {
+    return 'OpenAI API quota is exhausted for this key or project. Check billing, credits, or usage limits.'
   }
 
-  const payload = await response.json()
-  return extractOpenAIText(payload)
+  if (status === 429 || type === 'rate_limit_exceeded') {
+    return message
+      ? `OpenAI rate limit hit: ${message}`
+      : 'OpenAI rate limit hit. Wait briefly and try again, or use a smaller model.'
+  }
+
+  if (message) {
+    return `OpenAI request failed: ${message}`
+  }
+
+  return `OpenAI request failed: ${status}`
+}
+
+function buildGeminiErrorMessage(status: number, payload: APIErrorPayload) {
+  const message = payload.error?.message?.trim()
+  if (message) {
+    return `Gemini request failed: ${message}`
+  }
+  return `Gemini request failed: ${status}`
+}
+
+async function runOpenAI(settings: AISettings, prompt: string) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const response = await fetch('https://api.openai.com/v1/responses', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${settings.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: settings.model,
+        input: prompt,
+      }),
+    })
+
+    if (response.ok) {
+      const payload = await response.json()
+      return extractOpenAIText(payload)
+    }
+
+    const payload = await parseErrorPayload(response)
+    const code = payload.error?.code
+    const type = payload.error?.type
+
+    if (response.status === 429 && code !== 'insufficient_quota' && type !== 'insufficient_quota') {
+      await delay(1000 * (attempt + 1) ** 2)
+      continue
+    }
+
+    throw new Error(buildOpenAIErrorMessage(response.status, payload))
+  }
+
+  throw new Error('OpenAI rate limit persisted after retries. Try again in a minute.')
 }
 
 async function runGemini(settings: AISettings, prompt: string) {
@@ -184,7 +247,8 @@ async function runGemini(settings: AISettings, prompt: string) {
   )
 
   if (!response.ok) {
-    throw new Error(`Gemini request failed: ${response.status} ${response.statusText}`)
+    const payload = await parseErrorPayload(response)
+    throw new Error(buildGeminiErrorMessage(response.status, payload))
   }
 
   const payload = await response.json()
