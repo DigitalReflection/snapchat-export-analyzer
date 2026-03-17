@@ -16,10 +16,11 @@ import type {
   ContactSummary,
   FileSummary,
   NormalizedEvent,
+  ParsedUpload,
   UploadSummary,
   WorkspaceDataset,
 } from './types'
-import { runAIReview } from './lib/ai'
+import { runAIReview, runContactAIReview } from './lib/ai'
 import {
   downloadContactsCsv,
   downloadEventsJson,
@@ -27,6 +28,7 @@ import {
   downloadWorkspaceReport,
 } from './lib/exporters'
 import { buildWorkspace } from './lib/insights'
+import { clearSnapshot, loadSnapshot, saveSnapshot } from './lib/persistence'
 import { parseSnapchatFileList, parseSnapchatZip } from './lib/snapchatParser'
 import { sampleUpload } from './sampleData'
 
@@ -49,13 +51,14 @@ type ModalState =
 const NOTES_KEY = 'export-viewer-pro-private-notes'
 const AI_SETTINGS_KEY = 'export-viewer-pro-ai-settings'
 const CONTACT_LABELS_KEY = 'export-viewer-pro-contact-labels'
+const LOCK_CODE_KEY = 'export-viewer-pro-lock-code'
 const DEFAULT_MODELS: Record<AIProvider, string> = {
-  gemini: 'gemini-2.5-pro',
-  openai: 'gpt-5.2',
+  gemini: 'gemini-2.5-flash',
+  openai: 'gpt-5-mini',
 }
 const MODEL_PRESETS: Record<AIProvider, string[]> = {
-  gemini: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-flash-latest'],
-  openai: ['gpt-5.2', 'gpt-5-mini', 'gpt-5.1'],
+  gemini: ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-flash-latest'],
+  openai: ['gpt-5-mini', 'gpt-5.2', 'gpt-5.1'],
 }
 const SUPPORTED_EXPORT_AREAS = [
   'Account',
@@ -96,6 +99,8 @@ const TAB_LABELS: Array<{ id: ActiveTab; label: string }> = [
 const MEDIA_DETAIL_PATTERN = /\.(?:jpe?g|png|gif|heic|mp4|mov|webm|avi|mkv)$/i
 const THREAD_PAGE_SIZE = 200
 const LARGE_EXPORT_THRESHOLD = 4000
+const CONTACT_AI_QUESTION =
+  'Organize this selected thread into a factual timeline, interaction patterns, tone categories, repeated names or references, and open follow-up checks with evidence IDs.'
 
 type ContactDateMarker = {
   label: string
@@ -503,6 +508,7 @@ function DetailModal(props: {
 export default function App() {
   const [uploads, setUploads] = useState([sampleUpload])
   const [workspace, setWorkspace] = useState<WorkspaceDataset>(() => buildWorkspace([sampleUpload]))
+  const [isHydrating, setIsHydrating] = useState(true)
   const [status, setStatus] = useState('Demo workspace loaded. Upload a zip or extracted export folder.')
   const [error, setError] = useState<string | null>(null)
   const [workspaceError, setWorkspaceError] = useState<string | null>(null)
@@ -533,6 +539,12 @@ export default function App() {
   const [aiResult, setAiResult] = useState<AIResult | null>(null)
   const [aiError, setAiError] = useState<string | null>(null)
   const [isAiLoading, setIsAiLoading] = useState(false)
+  const [contactAiResults, setContactAiResults] = useState<Record<string, AIResult>>({})
+  const [contactAiError, setContactAiError] = useState<string | null>(null)
+  const [isContactAiLoading, setIsContactAiLoading] = useState(false)
+  const [lockDraft, setLockDraft] = useState('')
+  const [unlockDraft, setUnlockDraft] = useState('')
+  const [isLocked, setIsLocked] = useState(false)
   const folderInputRef = useRef<HTMLInputElement>(null)
   const workspaceWorkerRef = useRef<Worker | null>(null)
   const workspaceRequestRef = useRef(0)
@@ -547,6 +559,7 @@ export default function App() {
     setNotes(window.localStorage.getItem(NOTES_KEY) ?? '')
     const storedLabels = window.localStorage.getItem(CONTACT_LABELS_KEY)
     const storedSettings = window.sessionStorage.getItem(AI_SETTINGS_KEY)
+    const storedLockCode = window.localStorage.getItem(LOCK_CODE_KEY)
     if (storedLabels) {
       try {
         setContactLabels(JSON.parse(storedLabels) as Record<string, ContactLabel>)
@@ -561,6 +574,19 @@ export default function App() {
         window.sessionStorage.removeItem(AI_SETTINGS_KEY)
       }
     }
+    setIsLocked(Boolean(storedLockCode))
+
+    void loadSnapshot()
+      .then((snapshot) => {
+        if (!snapshot?.uploads?.length) return
+        setUploads(snapshot.uploads)
+        setContactAiResults(snapshot.contactAiResults ?? {})
+        setStatus(`Restored ${snapshot.uploads.length} saved upload(s) from this browser.`)
+      })
+      .catch(() => {
+        setStatus('Demo workspace loaded. Upload a zip or extracted export folder.')
+      })
+      .finally(() => setIsHydrating(false))
   }, [])
 
   useEffect(() => {
@@ -584,6 +610,17 @@ export default function App() {
     () => window.sessionStorage.setItem(AI_SETTINGS_KEY, JSON.stringify(aiSettings)),
     [aiSettings],
   )
+  useEffect(() => {
+    if (isHydrating) return
+
+    void saveSnapshot({
+      uploads: uploads as ParsedUpload[],
+      contactAiResults,
+      savedAt: new Date().toISOString(),
+    }).catch(() => {
+      setWorkspaceError('Local workspace persistence failed. The dashboard will keep working for this session.')
+    })
+  }, [contactAiResults, isHydrating, uploads])
   useEffect(() => {
     const worker = workspaceWorkerRef.current
     if (!worker) {
@@ -740,6 +777,13 @@ export default function App() {
     () => selectedThread.filter((event) => isMediaEvent(event)),
     [selectedThread],
   )
+  const selectedEntities = useMemo(
+    () =>
+      selectedSummary
+        ? workspace.entities.filter((entity) => entity.contacts.includes(selectedSummary.name)).slice(0, 20)
+        : [],
+    [selectedSummary, workspace.entities],
+  )
   const selectedSourceFiles = useMemo(
     () => [...new Set(selectedThread.map((event) => event.sourceFile))].slice(0, 10),
     [selectedThread],
@@ -748,6 +792,7 @@ export default function App() {
     () => Object.fromEntries(selectedDateMarkers.map((marker) => [marker.label, marker.event])),
     [selectedDateMarkers],
   )
+  const selectedContactAiResult = selectedSummary ? contactAiResults[selectedSummary.name] ?? null : null
 
   const searchTerms = useMemo(() => queryTermsFromInput(deferredSearchQuery), [deferredSearchQuery])
   const searchHits = useMemo(() => {
@@ -869,6 +914,82 @@ export default function App() {
     } finally {
       setIsAiLoading(false)
     }
+  }
+
+  async function handleSelectedContactAiRun() {
+    if (!selectedSummary) return
+
+    setIsContactAiLoading(true)
+    setContactAiError(null)
+
+    try {
+      const result = await runContactAIReview(
+        aiSettings,
+        workspace,
+        selectedSummary,
+        selectedThread,
+        selectedEntities,
+        CONTACT_AI_QUESTION,
+      )
+
+      setContactAiResults((current) => ({
+        ...current,
+        [selectedSummary.name]: result,
+      }))
+    } catch (caught) {
+      setContactAiError(caught instanceof Error ? caught.message : 'Selected-thread AI analysis failed.')
+    } finally {
+      setIsContactAiLoading(false)
+    }
+  }
+
+  async function handleResetLocalWorkspace() {
+    await clearSnapshot()
+    setUploads([sampleUpload])
+    setContactAiResults({})
+    setAiResult(null)
+    setSelectedContact('')
+    setStatus('Local workspace cleared. Demo workspace loaded.')
+  }
+
+  function handleSaveLockCode() {
+    const code = lockDraft.trim()
+    if (code.length < 4) {
+      setError('Use a lock code with at least 4 characters.')
+      return
+    }
+
+    window.localStorage.setItem(LOCK_CODE_KEY, code)
+    setIsLocked(true)
+    setLockDraft('')
+    setUnlockDraft('')
+    setError(null)
+    setStatus('Local browser lock enabled for this dashboard.')
+  }
+
+  function handleUnlock() {
+    const saved = window.localStorage.getItem(LOCK_CODE_KEY)
+    if (!saved) {
+      setIsLocked(false)
+      return
+    }
+
+    if (unlockDraft === saved) {
+      setIsLocked(false)
+      setUnlockDraft('')
+      setError(null)
+      return
+    }
+
+    setError('Lock code did not match.')
+  }
+
+  function handleDisableLock() {
+    window.localStorage.removeItem(LOCK_CODE_KEY)
+    setIsLocked(false)
+    setUnlockDraft('')
+    setLockDraft('')
+    setStatus('Local browser lock removed.')
   }
 
   function openMetricModal(key: MetricKey) {
@@ -1494,6 +1615,42 @@ export default function App() {
     return null
   }
 
+  if (isLocked) {
+    return (
+      <main className="app-shell">
+        <section className="panel lock-panel">
+          <div>
+            <p className="eyebrow">Private workspace lock</p>
+            <h1>Unlock Export Viewer Pro</h1>
+            <p className="section-copy">
+              This is a local browser lock only. It protects this device session, not the public site itself.
+            </p>
+          </div>
+          <div className="settings-grid">
+            <label className="search-field">
+              <span>Lock code</span>
+              <input
+                onChange={(event) => setUnlockDraft(event.target.value)}
+                placeholder="Enter your lock code"
+                type="password"
+                value={unlockDraft}
+              />
+            </label>
+          </div>
+          <div className="button-row">
+            <button className="primary-button" onClick={handleUnlock} type="button">
+              Unlock
+            </button>
+            <button className="ghost-button" onClick={handleDisableLock} type="button">
+              Remove local lock
+            </button>
+          </div>
+          {error ? <p className="error-line">{error}</p> : null}
+        </section>
+      </main>
+    )
+  }
+
   return (
     <>
       <main className="app-shell">
@@ -1516,6 +1673,9 @@ export default function App() {
             </button>
             <button className="ghost-button" onClick={() => setUploads([sampleUpload])} type="button">
               Reset demo
+            </button>
+            <button className="ghost-button" onClick={() => void handleResetLocalWorkspace()} type="button">
+              Clear saved
             </button>
             <input
               ref={folderInputRef}
@@ -1540,6 +1700,7 @@ export default function App() {
             ) : null}
           </div>
           <div className="button-row">
+            <span className="outline-pill">{isHydrating ? 'restoring local workspace...' : 'auto-save on'}</span>
             <button className="chip-button" onClick={() => downloadEventsJson(workspace.events)} type="button">
               Events JSON
             </button>
@@ -1560,8 +1721,20 @@ export default function App() {
             <p className="eyebrow">AI quick setup</p>
             <h2>Paste your key once</h2>
             <p className="section-copy">
-              Use AI for deeper review, summaries, entity cleanup, and large-export triage. The dashboard still works without it.
+              Use AI for on-demand thread organization, deeper review, and large-export triage. The dashboard still works without it.
             </p>
+            <div className="button-row">
+              {MODEL_PRESETS[aiSettings.provider].map((model) => (
+                <button
+                  className={aiSettings.model === model ? 'label-button active' : 'label-button'}
+                  key={model}
+                  onClick={() => setAiSettings((current) => ({ ...current, model }))}
+                  type="button"
+                >
+                  {model}
+                </button>
+              ))}
+            </div>
           </div>
           <div className="top-ai-controls">
             <label className="search-field">
@@ -1607,6 +1780,25 @@ export default function App() {
             <button className="primary-button" onClick={handleAiRun} type="button">
               {isAiLoading ? 'Running AI...' : 'Run AI review'}
             </button>
+          </div>
+          <div className="top-ai-footer">
+            <label className="search-field">
+              <span>Local lock code</span>
+              <input
+                onChange={(event) => setLockDraft(event.target.value)}
+                placeholder="4+ characters to lock this browser"
+                type="password"
+                value={lockDraft}
+              />
+            </label>
+            <div className="button-row">
+              <button className="secondary-button" onClick={handleSaveLockCode} type="button">
+                Enable local lock
+              </button>
+              <button className="ghost-button" onClick={handleDisableLock} type="button">
+                Remove lock
+              </button>
+            </div>
           </div>
         </section>
 
@@ -1883,7 +2075,38 @@ export default function App() {
                         {label}
                       </button>
                     ))}
+                    <button className="secondary-button" onClick={handleSelectedContactAiRun} type="button">
+                      {isContactAiLoading ? 'AI organizing...' : 'Organize with AI'}
+                    </button>
                   </div>
+
+                  <article className="subpanel">
+                    <div className="thread-header-row">
+                      <div>
+                        <h3>Thread intelligence</h3>
+                        <p className="section-copy">
+                          Runs only on the selected contact thread using your current provider and model.
+                        </p>
+                      </div>
+                      <span className="outline-pill">
+                        {aiSettings.provider} / {aiSettings.model}
+                      </span>
+                    </div>
+                    {contactAiError ? <p className="error-line">{contactAiError}</p> : null}
+                    {selectedContactAiResult ? (
+                      <div className="ai-result">
+                        <div className="result-meta">
+                          <span>{selectedContactAiResult.provider}</span>
+                          <span>{formatDate(selectedContactAiResult.createdAt)}</span>
+                        </div>
+                        <p className="raw-block">{selectedContactAiResult.answer}</p>
+                      </div>
+                    ) : (
+                      <p className="empty-state">
+                        No selected-thread AI result yet. Open a contact and run AI to organize that one thread only.
+                      </p>
+                    )}
+                  </article>
 
                   <article className="subpanel">
                     <div className="thread-header-row">
