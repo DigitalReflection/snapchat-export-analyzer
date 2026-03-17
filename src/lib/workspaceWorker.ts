@@ -1,4 +1,4 @@
-import { buildWorkspace } from './insights'
+import { buildWorkspaceLite } from './insights'
 import type { ParsedUpload } from '../types'
 
 type WorkspaceWorkerRequest = {
@@ -10,7 +10,7 @@ self.onmessage = (event: MessageEvent<WorkspaceWorkerRequest>) => {
   const { requestId, uploads } = event.data
 
   try {
-    const workspace = buildWorkspace(uploads)
+    const workspace = buildWorkspaceLite(uploads)
     self.postMessage({ requestId, workspace })
   } catch (error) {
     self.postMessage({

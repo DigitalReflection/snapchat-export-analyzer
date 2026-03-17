@@ -27,7 +27,7 @@ import {
   downloadKeywordHitsCsv,
   downloadWorkspaceReport,
 } from './lib/exporters'
-import { buildWorkspace } from './lib/insights'
+import { buildWorkspaceLite } from './lib/insights'
 import { clearSnapshot, loadSnapshot, saveSnapshot } from './lib/persistence'
 import { parseSnapchatFileList, parseSnapchatZip } from './lib/snapchatParser'
 import { sampleUpload } from './sampleData'
@@ -525,7 +525,7 @@ function DetailModal(props: {
 
 export default function App() {
   const [uploads, setUploads] = useState([sampleUpload])
-  const [workspace, setWorkspace] = useState<WorkspaceDataset>(() => buildWorkspace([sampleUpload]))
+  const [workspace, setWorkspace] = useState<WorkspaceDataset>(() => buildWorkspaceLite([sampleUpload]))
   const [isHydrating, setIsHydrating] = useState(true)
   const [status, setStatus] = useState('Demo workspace loaded. Upload a zip or extracted export folder.')
   const [error, setError] = useState<string | null>(null)
@@ -644,7 +644,7 @@ export default function App() {
   useEffect(() => {
     const worker = workspaceWorkerRef.current
     if (!worker) {
-      setWorkspace(buildWorkspace(uploads))
+      setWorkspace(buildWorkspaceLite(uploads))
       return
     }
 
@@ -1770,7 +1770,7 @@ export default function App() {
             <p>{status}</p>
             {error ? <p className="error-line">{error}</p> : null}
             {workspaceError ? <p className="error-line">{workspaceError}</p> : null}
-            {isWorkspaceLoading ? <p className="loading-line">Organizing export in the background...</p> : null}
+            {isWorkspaceLoading ? <p className="loading-line">Loading contacts and thread rows...</p> : null}
             {isWorkspaceLoading || isLoadingZip || isLoadingFolder ? (
               <div className="progress-shell" aria-label="Processing progress">
                 <div className="progress-bar indeterminate" />
@@ -1778,7 +1778,7 @@ export default function App() {
             ) : null}
             {requiresAiForDeepReview && !aiSettings.apiKey.trim() ? (
               <p className="loading-line">
-                Large export detected. Paste an API key below to enable deep AI review while the deterministic view stays lightweight.
+                Large export detected. The app will stay in lightweight mode until you open one contact and run AI on that thread.
               </p>
             ) : null}
           </div>
@@ -2031,7 +2031,7 @@ export default function App() {
                   </span>
                 }
                 eyebrow="Contact browser"
-                subtitle="Local labels remain manual. The app does not infer gender from names or messages."
+                subtitle="Lightweight mode only indexes contacts and thread rows on load. Open one contact and run AI only when needed."
                 title="Contacts"
               />
               <div className="filter-grid">

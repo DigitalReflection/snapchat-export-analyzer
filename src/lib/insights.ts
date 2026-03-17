@@ -976,6 +976,61 @@ export function buildWorkspace(uploads: ParsedUpload[]): WorkspaceDataset {
   }
 }
 
+export function buildWorkspaceLite(uploads: ParsedUpload[]): WorkspaceDataset {
+  const fileSummaries = uploads.flatMap((upload) => upload.fileSummaries)
+  const events = uploads
+    .flatMap((upload) => upload.events)
+    .sort((left, right) => {
+      if (!left.timestamp && !right.timestamp) {
+        return left.id.localeCompare(right.id)
+      }
+      if (!left.timestamp) {
+        return 1
+      }
+      if (!right.timestamp) {
+        return -1
+      }
+      return left.timestamp.localeCompare(right.timestamp)
+    })
+
+  const contacts = buildContacts(events, [])
+  const timeline = buildTimeline(events)
+  const activitySource = events.filter((event) => event.category === 'chat')
+  const { hourBuckets, weekdayBuckets, heatmap } = buildActivityBuckets(
+    activitySource.length ? activitySource : events,
+  )
+  const stats = buildStats(events, contacts, [], uploads, fileSummaries)
+  const factsSummary = [
+    `${uploads.length} upload${uploads.length === 1 ? '' : 's'} loaded with ${stats.totalEvents} normalized events.`,
+    contacts[0]
+      ? `${contacts[0].name} is currently the most active contact with ${contacts[0].messageCount} visible chat rows.`
+      : 'No contacts were recovered from the current export.',
+    'Advanced workspace patterning is paused by default. Open one contact and run AI only when needed.',
+  ]
+
+  return {
+    uploads: uploads.map((upload) => upload.upload),
+    fileSummaries,
+    events,
+    stats,
+    accountProfiles: uploads.map((upload) => upload.upload.account),
+    contacts,
+    keywordHits: [],
+    signals: [],
+    entities: [],
+    repeatedPhrases: [],
+    toneSummaries: [],
+    timeline,
+    hourBuckets,
+    weekdayBuckets,
+    heatmap,
+    notablePeriods: [],
+    evidenceSnippets: [],
+    factsSummary,
+    warnings: dedupeWarnings(uploads),
+  }
+}
+
 export function buildWorkspaceReport(workspace: WorkspaceDataset) {
   return {
     generatedAt: new Date().toISOString(),
