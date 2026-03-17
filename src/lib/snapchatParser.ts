@@ -14,6 +14,20 @@ type FlatRecord = Record<string, NormalizedValue>
 
 const SUPPORTED_EXTENSIONS = ['.json', '.csv', '.html', '.htm', '.txt']
 const ACCOUNT_KEYS = ['username', 'display', 'email', 'phone', 'mobile', 'profile', 'account']
+const MEDIA_EXTENSIONS = [
+  '.jpg',
+  '.jpeg',
+  '.png',
+  '.gif',
+  '.mp4',
+  '.mov',
+  '.webm',
+  '.heic',
+  '.avi',
+  '.mkv',
+  '.wav',
+  '.mp3',
+]
 
 function slugify(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, '-')
@@ -28,6 +42,10 @@ function hasSupportedExtension(path: string) {
   return SUPPORTED_EXTENSIONS.includes(extensionOf(path))
 }
 
+function isMediaExtension(path: string) {
+  return MEDIA_EXTENSIONS.includes(extensionOf(path))
+}
+
 function detectCategory(path: string, records: FlatRecord[]): DataCategory {
   const lower = path.toLowerCase()
   const keys = records.slice(0, 5).flatMap((record) => Object.keys(record).map((key) => key.toLowerCase()))
@@ -35,6 +53,8 @@ function detectCategory(path: string, records: FlatRecord[]): DataCategory {
   if (
     lower.includes('account') ||
     lower.includes('profile') ||
+    lower.includes('user_public_profile') ||
+    lower.includes('public_profile') ||
     keys.some((key) => ACCOUNT_KEYS.some((needle) => key.includes(needle)))
   ) {
     return 'account'
@@ -44,17 +64,24 @@ function detectCategory(path: string, records: FlatRecord[]): DataCategory {
     lower.includes('chat') ||
     lower.includes('conversation') ||
     lower.includes('message') ||
+    lower.includes('saved_chat') ||
+    lower.includes('snap_history') ||
     keys.some((key) => ['message', 'chat', 'text', 'body'].some((needle) => key.includes(needle)))
   ) {
     return 'chat'
   }
 
-  if (lower.includes('friend') || keys.some((key) => key.includes('friend'))) {
+  if (
+    lower.includes('friend') ||
+    lower.includes('friends') ||
+    keys.some((key) => key.includes('friend'))
+  ) {
     return 'friend'
   }
 
   if (
     lower.includes('location') ||
+    lower.includes('snap_map') ||
     keys.some((key) => ['location', 'latitude', 'longitude', 'address'].some((needle) => key.includes(needle)))
   ) {
     return 'location'
@@ -64,6 +91,7 @@ function detectCategory(path: string, records: FlatRecord[]): DataCategory {
     lower.includes('login') ||
     lower.includes('device') ||
     lower.includes('session') ||
+    lower.includes('login_history') ||
     keys.some((key) => ['device', 'session', 'ip', 'login'].some((needle) => key.includes(needle)))
   ) {
     return 'login'
@@ -78,7 +106,11 @@ function detectCategory(path: string, records: FlatRecord[]): DataCategory {
     return 'memory'
   }
 
-  if (lower.includes('search') || keys.some((key) => key.includes('query'))) {
+  if (
+    lower.includes('search') ||
+    lower.includes('search_history') ||
+    keys.some((key) => key.includes('query'))
+  ) {
     return 'search'
   }
 
@@ -224,6 +256,10 @@ function parseByExtension(path: string, content: string) {
   return parseTxt(content)
 }
 
+async function fileToText(file: File) {
+  return file.text()
+}
+
 function pickString(record: FlatRecord, needles: string[]) {
   const entry = Object.entries(record).find(([key, value]) => {
     const lower = key.toLowerCase()
@@ -352,6 +388,7 @@ export async function parseSnapchatZip(file: File): Promise<ParsedUpload> {
 
   const allEntries = Object.values(zip.files).filter((entry) => !entry.dir)
   const supportedEntries = allEntries.filter((entry) => hasSupportedExtension(entry.name))
+  const skippedMediaEntries = allEntries.filter((entry) => isMediaExtension(entry.name))
 
   for (const entry of supportedEntries) {
     try {
@@ -428,8 +465,123 @@ export async function parseSnapchatZip(file: File): Promise<ParsedUpload> {
     warnings,
   }
 
+  if (skippedMediaEntries.length > 0) {
+    upload.warnings.push(
+      `Skipped ${skippedMediaEntries.length} media file${skippedMediaEntries.length === 1 ? '' : 's'} and only parsed text-based export data.`,
+    )
+  }
+
   return {
     upload,
+    fileSummaries: fileSummaries.sort((left, right) => right.rows - left.rows),
+    events: events.sort((left, right) => {
+      if (!left.timestamp) {
+        return 1
+      }
+      if (!right.timestamp) {
+        return -1
+      }
+      return left.timestamp.localeCompare(right.timestamp)
+    }),
+  }
+}
+
+export async function parseSnapchatFileList(files: File[]): Promise<ParsedUpload> {
+  const uploadId = slugify(`folder-${files[0]?.name ?? 'export'}-${Date.now()}`)
+  const warnings: string[] = []
+  const fileSummaries: FileSummary[] = []
+  const events: NormalizedEvent[] = []
+  let account = buildEmptyAccount()
+
+  const supportedFiles = files.filter((file) =>
+    hasSupportedExtension(file.webkitRelativePath || file.name),
+  )
+  const skippedMedia = files.filter((file) => isMediaExtension(file.webkitRelativePath || file.name))
+
+  for (const file of supportedFiles) {
+    const path = file.webkitRelativePath || file.name
+
+    try {
+      const content = await fileToText(file)
+      const records = parseByExtension(path, content)
+      const category = detectCategory(path, records)
+      const normalized = records
+        .map((record, index) => normalizeEvent(uploadId, path, category, record, index))
+        .filter((event) => {
+          if (category === 'unknown') {
+            return Boolean(
+              event.timestamp ||
+                event.contact ||
+                event.text ||
+                event.detail ||
+                event.locationName,
+            )
+          }
+
+          return true
+        })
+
+      if (category === 'account') {
+        records.forEach((record) => {
+          account = enrichAccount(account, record)
+        })
+      }
+
+      events.push(...normalized)
+      fileSummaries.push({
+        uploadId,
+        path,
+        extension: extensionOf(path),
+        category,
+        rows: normalized.length,
+        supported: true,
+      })
+    } catch (error) {
+      warnings.push(
+        `Could not parse ${path}: ${error instanceof Error ? error.message : 'unknown error'}`,
+      )
+    }
+  }
+
+  files
+    .filter((file) => !hasSupportedExtension(file.webkitRelativePath || file.name))
+    .forEach((file) => {
+      const path = file.webkitRelativePath || file.name
+      fileSummaries.push({
+        uploadId,
+        path,
+        extension: extensionOf(path),
+        category: 'unknown',
+        rows: 0,
+        supported: false,
+      })
+    })
+
+  const categoryCounts = events.reduce<Partial<Record<DataCategory, number>>>((counts, event) => {
+    counts[event.category] = (counts[event.category] ?? 0) + 1
+    return counts
+  }, {})
+
+  if (skippedMedia.length > 0) {
+    warnings.push(
+      `Skipped ${skippedMedia.length} media file${skippedMedia.length === 1 ? '' : 's'} and parsed the remaining text data directly from the extracted export folder.`,
+    )
+  }
+
+  return {
+    upload: {
+      id: uploadId,
+      fileName: files[0]?.webkitRelativePath?.split('/')[0] || 'extracted-export',
+      sizeBytes: files.reduce((sum, file) => sum + file.size, 0),
+      uploadedAt: new Date().toISOString(),
+      processedAt: new Date().toISOString(),
+      totalFiles: files.length,
+      supportedFiles: supportedFiles.length,
+      unsupportedFiles: files.length - supportedFiles.length,
+      categoryCounts,
+      account,
+      warnings,
+    },
     fileSummaries: fileSummaries.sort((left, right) => right.rows - left.rows),
     events: events.sort((left, right) => {
       if (!left.timestamp) {

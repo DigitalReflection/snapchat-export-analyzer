@@ -43,6 +43,64 @@ function buildPrompt(workspace: WorkspaceDataset, question: string) {
   ].join('\n')
 }
 
+function chunkChatEvents(workspace: WorkspaceDataset, maxChars = 18000) {
+  const chatEvents = workspace.events.filter((event) => event.category === 'chat')
+  const chunks: string[] = []
+  let current = ''
+
+  chatEvents.forEach((event) => {
+    const line = [
+      `[${event.id}]`,
+      event.timestamp ?? 'unknown-time',
+      event.contact ?? 'unknown-contact',
+      event.text ?? event.detail ?? event.evidenceText,
+    ].join(' | ')
+
+    if ((current + line).length > maxChars && current) {
+      chunks.push(current)
+      current = line
+      return
+    }
+
+    current = current ? `${current}\n${line}` : line
+  })
+
+  if (current) {
+    chunks.push(current)
+  }
+
+  return chunks
+}
+
+function buildChunkPrompt(question: string, chunk: string, index: number, total: number) {
+  return [
+    'You are analyzing one chunk of chat messages from a communication intelligence dashboard.',
+    'Stay factual and evidence-based.',
+    'Do not speculate about intent.',
+    'Return bullet-style short findings with citations using event IDs.',
+    `Chunk ${index + 1} of ${total}.`,
+    `Question: ${question}`,
+    '',
+    'Chat chunk:',
+    chunk,
+  ].join('\n')
+}
+
+function buildSynthesisPrompt(
+  workspace: WorkspaceDataset,
+  question: string,
+  chunkFindings: string[],
+) {
+  return [
+    buildPrompt(workspace, question),
+    '',
+    'Chunk-level findings:',
+    chunkFindings.map((finding, index) => `Chunk ${index + 1}:\n${finding}`).join('\n\n'),
+    '',
+    'Produce a final answer that merges the deterministic context and the chunk-level findings.',
+  ].join('\n')
+}
+
 function extractOpenAIText(payload: unknown) {
   if (!payload || typeof payload !== 'object') {
     return ''
@@ -142,11 +200,27 @@ export async function runAIReview(
     throw new Error('Enter an API key before running AI analysis.')
   }
 
-  const prompt = buildPrompt(workspace, question)
-  const answer =
+  const chatChunks = chunkChatEvents(workspace)
+  const runProvider = (prompt: string) =>
     settings.provider === 'openai'
-      ? await runOpenAI(settings, prompt)
-      : await runGemini(settings, prompt)
+      ? runOpenAI(settings, prompt)
+      : runGemini(settings, prompt)
+
+  let answer = ''
+
+  if (chatChunks.length <= 1) {
+    answer = await runProvider(buildPrompt(workspace, question))
+  } else {
+    const chunkFindings: string[] = []
+
+    for (const [index, chunk] of chatChunks.entries()) {
+      chunkFindings.push(
+        await runProvider(buildChunkPrompt(question, chunk, index, chatChunks.length)),
+      )
+    }
+
+    answer = await runProvider(buildSynthesisPrompt(workspace, question, chunkFindings))
+  }
 
   if (!answer) {
     throw new Error('The AI provider returned an empty response.')

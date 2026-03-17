@@ -22,8 +22,11 @@ A privacy-first web dashboard for reviewing communication exports that an accoun
 3. Normalize useful rows into account, chat, contact, location, search, login, and memory events.
 4. Build deterministic analytics for timelines, frequency shifts, recurring entities, repeated phrases, tone categories, notable periods, and evidence-backed signals.
 5. Support multiple uploads in one workspace to enable cross-upload comparison.
-6. Export normalized events, contacts, keyword matches, and a structured workspace report.
-7. Run optional browser-side AI review using Gemini or OpenAI with a user-provided API key.
+6. Browse full contact threads in a chat-first layout with manual local grouping labels.
+7. Search custom keywords or phrases across all chat text.
+8. Import either zip exports or extracted export folders, with folder mode skipping media files.
+9. Export normalized events, contacts, keyword matches, and a structured workspace report.
+10. Run optional browser-side AI review using Gemini or OpenAI with a user-provided API key.
 
 ## Dashboard sections
 

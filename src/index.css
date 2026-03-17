@@ -1,24 +1,21 @@
 :root {
-  font-family:
-    Inter, 'Segoe UI', sans-serif;
+  font-family: 'Segoe UI', sans-serif;
   line-height: 1.5;
   font-weight: 400;
-  color: #18304a;
+  color: #dce7f2;
   background:
-    radial-gradient(circle at top, rgba(255, 211, 61, 0.2), transparent 30%),
-    linear-gradient(180deg, #fff8dd 0%, #eef4f9 48%, #f7fbff 100%);
+    radial-gradient(circle at top, rgba(66, 196, 255, 0.12), transparent 26%),
+    radial-gradient(circle at top right, rgba(90, 255, 174, 0.08), transparent 22%),
+    linear-gradient(180deg, #05090d 0%, #08111b 48%, #09131f 100%);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  --accent: #ffd33d;
-  --border: rgba(24, 48, 74, 0.12);
-  --border-soft: rgba(24, 48, 74, 0.08);
-  --surface: rgba(255, 255, 255, 0.9);
-  --surface-soft: rgba(247, 251, 255, 0.86);
-  --text-strong: #0f2438;
-  --muted: #53667a;
-  --shadow: 0 22px 60px rgba(39, 60, 84, 0.12);
+  --border: rgba(80, 255, 170, 0.18);
+  --surface: rgba(11, 20, 31, 0.94);
+  --text-strong: #f3f8ff;
+  --muted: #96aabf;
+  --shadow: 0 18px 42px rgba(0, 0, 0, 0.34);
 }
 
 * {
@@ -37,47 +34,32 @@ body {
 
 body,
 button,
+input,
+textarea,
+select,
 a {
   color: inherit;
 }
 
-a {
-  transition:
-    transform 180ms ease,
-    box-shadow 180ms ease,
-    opacity 180ms ease;
-}
-
-a:hover {
-  transform: translateY(-1px);
-}
-
 #root {
-  width: min(1280px, 100%);
+  width: min(1600px, 100%);
   margin: 0 auto;
 }
 
 h1,
 h2,
 h3,
-h4,
 p {
   margin-top: 0;
 }
 
 h1 {
-  font-size: clamp(2.4rem, 6vw, 4.8rem);
+  font-size: clamp(2.2rem, 5vw, 4rem);
   line-height: 0.95;
-  letter-spacing: -0.05em;
+  letter-spacing: -0.04em;
 }
 
-h2,
-h3 {
-  font-size: clamp(1.4rem, 3vw, 2rem);
-  line-height: 1.05;
-}
-
-ul,
-ol {
-  margin-bottom: 0;
+h2 {
+  font-size: clamp(1.2rem, 2.5vw, 1.75rem);
+  line-height: 1.08;
 }
