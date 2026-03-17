@@ -137,6 +137,12 @@ function normalizeHtmlLine(line: string) {
     .trim()
 }
 
+function decodeHtmlText(value: string) {
+  const parser = new DOMParser()
+  const document = parser.parseFromString(value, 'text/html')
+  return document.documentElement.textContent ?? value
+}
+
 function looksLikeStructuredBlob(value: string) {
   const compact = value.replace(/\s+/g, ' ').trim()
   if (!compact) {
@@ -158,7 +164,7 @@ function sanitizeReadableText(value: string | null) {
     return null
   }
 
-  const normalized = normalizeHtmlLine(value)
+  const normalized = normalizeHtmlLine(decodeHtmlText(value))
   if (!normalized) {
     return null
   }
@@ -534,12 +540,13 @@ function parseCsv(content: string): FlatRecord[] {
 }
 
 function parseHtml(content: string): FlatRecord[] {
-  const transcriptRecords = extractTranscriptRecords(content)
+  const document = new DOMParser().parseFromString(content, 'text/html')
+  const bodyText = document.body?.innerText ?? document.body?.textContent ?? ''
+  const transcriptRecords = extractTranscriptRecords(bodyText)
   if (transcriptRecords.length > 0) {
     return transcriptRecords
   }
 
-  const document = new DOMParser().parseFromString(content, 'text/html')
   const tables = [...document.querySelectorAll('table')]
   const tableRecords = tables.flatMap((table) => {
     const rows = [...table.querySelectorAll('tr')]
@@ -561,7 +568,7 @@ function parseHtml(content: string): FlatRecord[] {
     )
   })
 
-  const fallbackRecords = buildHtmlLineRecords(document.body?.innerText ?? '')
+  const fallbackRecords = buildHtmlLineRecords(bodyText)
   const combined = [...tableRecords, ...fallbackRecords]
 
   if (combined.length > 0) {

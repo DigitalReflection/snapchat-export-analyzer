@@ -197,6 +197,7 @@ function preserveBodyText(value: string | null | undefined) {
 function formatPlainConversationText(value: string | null | undefined) {
   if (!value) return ''
 
+  const decoded = new DOMParser().parseFromString(value, 'text/html').documentElement.textContent ?? value
   const normalized = value
     .replace(/<[^>]+>/g, ' ')
     .replace(/\u00a0/g, ' ')
@@ -205,8 +206,15 @@ function formatPlainConversationText(value: string | null | undefined) {
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim()
+  const plain = decoded
+    .replace(/\u00a0/g, ' ')
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
 
-  if (!normalized) return ''
+  if (!plain) return ''
 
   const looksStructured =
     (/^[[{]/.test(normalized) && /[:",]/.test(normalized)) ||
@@ -229,7 +237,7 @@ function formatPlainConversationText(value: string | null | undefined) {
     return ''
   }
 
-  return preserveBodyText(normalized)
+  return preserveBodyText(plain)
 }
 
 function escapeRegExp(value: string) {
