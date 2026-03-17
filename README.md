@@ -17,17 +17,17 @@ A privacy-first web dashboard for reviewing communication exports that an accoun
 
 ## Current capabilities
 
-1. Accept a Snapchat export zip in the browser.
+1. Show a startup selector for `Snapchat` or `Facebook` before any workspace loads.
 2. Parse supported JSON, CSV, HTML, and TXT files locally with upload/file provenance.
-3. Normalize useful rows into account, chat, contact, location, search, login, and memory events.
-4. Build deterministic analytics for timelines, frequency shifts, recurring entities, repeated phrases, tone categories, notable periods, and evidence-backed signals.
+3. Normalize useful rows into account, chat, contact, location, search, login, post/reaction/group/event, and media-style events.
+4. Build lightweight thread/contact indexes on load, then run deeper AI organization only on a selected thread.
 5. Support multiple uploads in one workspace to enable cross-upload comparison.
 6. Browse full contact threads in a chat-first layout with manual local grouping labels.
-7. Search custom keywords or phrases across all chat text.
+7. Search custom keywords or phrases across all parsed text.
 8. Import either zip exports or extracted export folders, with folder mode skipping media files.
 9. Load a Python-preprocessed cache JSON for very large exports.
-9. Export normalized events, contacts, keyword matches, and a structured workspace report.
-10. Run optional browser-side AI review using Gemini or OpenAI with a user-provided API key.
+10. Export normalized events, contacts, keyword matches, and a structured workspace report.
+11. Run optional browser-side AI review using Gemini or OpenAI with a user-provided API key.
 
 ## Dashboard sections
 
@@ -41,6 +41,11 @@ A privacy-first web dashboard for reviewing communication exports that an accoun
 - Deterministic findings and notable periods
 - Evidence snippets
 - Optional AI review
+
+## Platform support
+
+- Snapchat: saved chats, search, login/device, location, memories, and related export files.
+- Facebook: profile information, Messenger inbox, friends/followers, search history, security/login, comments, reactions, posts, groups, events, location/check-ins, and media metadata.
 
 ## Snapchat export coverage
 
@@ -119,6 +124,10 @@ The workflow file is already included at [.github/workflows/deploy-pages.yml](/C
 6. Deploy with `firebase deploy`.
 
 The repo already includes a starter [firebase.json](/C:/Users/Anon/Documents/Snapchat%20Spy/firebase.json) for SPA rewrites.
+
+## Codex spec
+
+The refined prompt used for the Facebook viewer extension is in [docs/facebook-viewer-codex-prompt.md](/C:/Users/Anon/Documents/Snapchat%20Spy/docs/facebook-viewer-codex-prompt.md).
 
 ## Next build steps
 

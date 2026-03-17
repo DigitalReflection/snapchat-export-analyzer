@@ -43,25 +43,25 @@ async function withStore<T>(
   })
 }
 
-export async function loadSnapshot() {
+export async function loadSnapshot(key = SNAPSHOT_KEY) {
   return withStore<PersistedSnapshot | null>('readonly', (store, resolve, reject) => {
-    const request = store.get(SNAPSHOT_KEY)
+    const request = store.get(key)
     request.onerror = () => reject(new Error('Saved workspace could not be read.'))
     request.onsuccess = () => resolve((request.result as PersistedSnapshot | undefined) ?? null)
   })
 }
 
-export async function saveSnapshot(snapshot: PersistedSnapshot) {
+export async function saveSnapshot(snapshot: PersistedSnapshot, key = SNAPSHOT_KEY) {
   return withStore<void>('readwrite', (store, resolve, reject) => {
-    const request = store.put(snapshot, SNAPSHOT_KEY)
+    const request = store.put(snapshot, key)
     request.onerror = () => reject(new Error('Saved workspace could not be updated.'))
     request.onsuccess = () => resolve()
   })
 }
 
-export async function clearSnapshot() {
+export async function clearSnapshot(key = SNAPSHOT_KEY) {
   return withStore<void>('readwrite', (store, resolve, reject) => {
-    const request = store.delete(SNAPSHOT_KEY)
+    const request = store.delete(key)
     request.onerror = () => reject(new Error('Saved workspace could not be cleared.'))
     request.onsuccess = () => resolve()
   })

@@ -382,7 +382,8 @@
 .chat-preview-panel,
 .modal-aside,
 .modal-main,
-.lock-panel {
+.lock-panel,
+.selector-panel {
   display: grid;
   gap: 0.9rem;
 }
@@ -459,6 +460,37 @@
 .lock-panel {
   max-width: 720px;
   margin: 6vh auto 0;
+}
+
+.selector-panel {
+  max-width: 980px;
+  margin: 6vh auto 0;
+}
+
+.selector-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.selector-card {
+  display: grid;
+  gap: 0.8rem;
+  text-align: left;
+  padding: 1.1rem;
+  border-radius: 18px;
+  border: 1px solid rgba(86, 255, 176, 0.22);
+  background: rgba(6, 13, 21, 0.92);
+  color: #ebf5ff;
+  cursor: pointer;
+  transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease;
+}
+
+.selector-card:hover,
+.selector-card-active {
+  transform: translateY(-1px);
+  border-color: rgba(111, 255, 190, 0.42);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.28);
 }
 
 .conversation-list {
@@ -797,7 +829,8 @@ mark {
   .filter-grid,
   .contact-summary-grid,
   .stats-grid,
-  .top-ai-controls {
+  .top-ai-controls,
+  .selector-grid {
     grid-template-columns: 1fr;
   }
 

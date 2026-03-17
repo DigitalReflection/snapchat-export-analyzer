@@ -20,7 +20,17 @@ import type {
 
 const DAY_IN_MS = 24 * 60 * 60 * 1000
 const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
-const CONTACT_CATEGORIES = new Set<DataCategory>(['chat', 'friend', 'search', 'unknown'])
+const CONTACT_CATEGORIES = new Set<DataCategory>([
+  'chat',
+  'event',
+  'friend',
+  'group',
+  'page',
+  'post',
+  'reaction',
+  'search',
+  'unknown',
+])
 const USERNAME_HINT = /[@._\d]/
 const NAME_STOPWORDS = new Set([
   'Monday',

@@ -17,6 +17,7 @@ import type {
   FileSummary,
   NormalizedEvent,
   ParsedUpload,
+  Platform,
   UploadSummary,
   WorkspaceDataset,
 } from './types'
@@ -29,8 +30,9 @@ import {
 } from './lib/exporters'
 import { buildWorkspaceLite } from './lib/insights'
 import { clearSnapshot, loadSnapshot, saveSnapshot } from './lib/persistence'
+import { parseFacebookFileList, parseFacebookZip } from './lib/facebookParser'
 import { parseSnapchatFileList, parseSnapchatZip } from './lib/snapchatParser'
-import { sampleUpload } from './sampleData'
+import { sampleFacebookUpload, sampleSnapchatUpload } from './sampleData'
 
 type ContactLabel = 'male' | 'female' | 'unknown'
 type ActiveTab = 'overview' | 'chats' | 'search' | 'signals' | 'ai' | 'data'
@@ -52,6 +54,7 @@ const NOTES_KEY = 'export-viewer-pro-private-notes'
 const AI_SETTINGS_KEY = 'export-viewer-pro-ai-settings'
 const CONTACT_LABELS_KEY = 'export-viewer-pro-contact-labels'
 const LOCK_CODE_KEY = 'export-viewer-pro-lock-code'
+const LAST_PLATFORM_KEY = 'export-viewer-pro-last-platform'
 const DEFAULT_MODELS: Record<AIProvider, string> = {
   gemini: 'gemini-2.5-flash-lite',
   openai: 'gpt-5-nano',
@@ -60,19 +63,71 @@ const MODEL_PRESETS: Record<AIProvider, string[]> = {
   gemini: ['gemini-2.5-flash-lite', 'gemini-2.5-flash'],
   openai: ['gpt-5-nano'],
 }
-const SUPPORTED_EXPORT_AREAS = [
-  'Account',
-  'Saved chats',
-  'Snap history',
-  'Friends',
-  'Search',
-  'Location',
-  'Login/device',
-  'Memories',
-  'Bitmoji',
-  'Support',
-  'Purchase',
-]
+const PLATFORM_CONFIG: Record<
+  Platform,
+  {
+    label: string
+    heroTitle: string
+    heroCopy: string
+    pickerCopy: string
+    folderStatus: string
+    supportedAreas: string[]
+    sampleUpload: ParsedUpload
+    parseZip: typeof parseSnapchatZip
+    parseFolder: typeof parseSnapchatFileList
+  }
+> = {
+  snapchat: {
+    label: 'Snapchat',
+    heroTitle: 'Snapchat Viewer',
+    heroCopy:
+      'Snapchat export review with click-through threads, timing analysis, and per-contact AI organization.',
+    pickerCopy: 'Saved chats, search history, login/device history, location, memories, and related export data.',
+    folderStatus: 'Parsing extracted Snapchat export folder and skipping media...',
+    supportedAreas: [
+      'Account',
+      'Saved chats',
+      'Snap history',
+      'Friends',
+      'Search',
+      'Location',
+      'Login/device',
+      'Memories',
+      'Bitmoji',
+      'Support',
+      'Purchase',
+    ],
+    sampleUpload: sampleSnapchatUpload,
+    parseZip: parseSnapchatZip,
+    parseFolder: parseSnapchatFileList,
+  },
+  facebook: {
+    label: 'Facebook',
+    heroTitle: 'Facebook Viewer',
+    heroCopy:
+      'Facebook data export and activity-log review with Messenger threads, profile activity, searches, security events, posts, reactions, groups, and events.',
+    pickerCopy:
+      'Messages, friends, search history, security/login, comments, reactions, groups, events, location, and profile data.',
+    folderStatus: 'Parsing extracted Facebook export folder and skipping media...',
+    supportedAreas: [
+      'Profile information',
+      'Messenger inbox',
+      'Friends and followers',
+      'Search history',
+      'Security/login',
+      'Comments',
+      'Likes and reactions',
+      'Posts',
+      'Groups',
+      'Events',
+      'Location history',
+      'Photos and videos',
+    ],
+    sampleUpload: sampleFacebookUpload,
+    parseZip: parseFacebookZip,
+    parseFolder: parseFacebookFileList,
+  },
+}
 const DELETION_TERMS = [
   'delete',
   'deleted',
@@ -101,6 +156,10 @@ const THREAD_PAGE_SIZE = 200
 const LARGE_EXPORT_THRESHOLD = 4000
 const CONTACT_AI_QUESTION =
   'Organize this selected thread into a factual timeline, interaction patterns, tone categories, repeated names or references, and open follow-up checks with evidence IDs.'
+
+function scopedStorageKey(base: string, platform: Platform) {
+  return `${base}-${platform}`
+}
 
 function estimateTokenCount(events: NormalizedEvent[]) {
   const joined = events
@@ -580,10 +639,13 @@ function DetailModal(props: {
 }
 
 export default function App() {
-  const [uploads, setUploads] = useState([sampleUpload])
-  const [workspace, setWorkspace] = useState<WorkspaceDataset>(() => buildWorkspaceLite([sampleUpload]))
+  const [selectedPlatform, setSelectedPlatform] = useState<Platform | null>(null)
+  const [platformPickerOpen, setPlatformPickerOpen] = useState(true)
+  const [lastPlatform, setLastPlatform] = useState<Platform | null>(null)
+  const [uploads, setUploads] = useState<ParsedUpload[]>([])
+  const [workspace, setWorkspace] = useState<WorkspaceDataset>(() => buildWorkspaceLite([]))
   const [isHydrating, setIsHydrating] = useState(true)
-  const [status, setStatus] = useState('Demo workspace loaded. Upload a zip or extracted export folder.')
+  const [status, setStatus] = useState('Choose a viewer to begin.')
   const [error, setError] = useState<string | null>(null)
   const [workspaceError, setWorkspaceError] = useState<string | null>(null)
   const [isWorkspaceLoading, setIsWorkspaceLoading] = useState(false)
@@ -625,6 +687,7 @@ export default function App() {
   const cacheInputRef = useRef<HTMLInputElement>(null)
   const workspaceWorkerRef = useRef<Worker | null>(null)
   const workspaceRequestRef = useRef(0)
+  const viewerConfig = selectedPlatform ? PLATFORM_CONFIG[selectedPlatform] : null
 
   const deferredContactSearch = useDeferredValue(contactSearch)
   const deferredSearchQuery = useDeferredValue(searchQuery)
@@ -633,17 +696,8 @@ export default function App() {
   useEffect(() => {
     folderInputRef.current?.setAttribute('webkitdirectory', '')
     folderInputRef.current?.setAttribute('directory', '')
-    setNotes(window.localStorage.getItem(NOTES_KEY) ?? '')
-    const storedLabels = window.localStorage.getItem(CONTACT_LABELS_KEY)
     const storedSettings = window.sessionStorage.getItem(AI_SETTINGS_KEY)
     const storedLockCode = window.localStorage.getItem(LOCK_CODE_KEY)
-    if (storedLabels) {
-      try {
-        setContactLabels(JSON.parse(storedLabels) as Record<string, ContactLabel>)
-      } catch {
-        window.localStorage.removeItem(CONTACT_LABELS_KEY)
-      }
-    }
     if (storedSettings) {
       try {
         setAiSettings(JSON.parse(storedSettings) as AISettings)
@@ -652,18 +706,11 @@ export default function App() {
       }
     }
     setIsLocked(Boolean(storedLockCode))
-
-    void loadSnapshot()
-      .then((snapshot) => {
-        if (!snapshot?.uploads?.length) return
-        setUploads(snapshot.uploads)
-        setContactAiResults(snapshot.contactAiResults ?? {})
-        setStatus(`Restored ${snapshot.uploads.length} saved upload(s) from this browser.`)
-      })
-      .catch(() => {
-        setStatus('Demo workspace loaded. Upload a zip or extracted export folder.')
-      })
-      .finally(() => setIsHydrating(false))
+    const storedPlatform = window.localStorage.getItem(LAST_PLATFORM_KEY)
+    if (storedPlatform === 'snapchat' || storedPlatform === 'facebook') {
+      setLastPlatform(storedPlatform)
+    }
+    setIsHydrating(false)
   }, [])
 
   useEffect(() => {
@@ -678,11 +725,72 @@ export default function App() {
     }
   }, [])
 
-  useEffect(() => window.localStorage.setItem(NOTES_KEY, notes), [notes])
-  useEffect(
-    () => window.localStorage.setItem(CONTACT_LABELS_KEY, JSON.stringify(contactLabels)),
-    [contactLabels],
-  )
+  useEffect(() => {
+    if (!selectedPlatform) return
+
+    setIsHydrating(true)
+    const notesKey = scopedStorageKey(NOTES_KEY, selectedPlatform)
+    const labelsKey = scopedStorageKey(CONTACT_LABELS_KEY, selectedPlatform)
+    const snapshotKey = scopedStorageKey('workspace', selectedPlatform)
+    const sampleUpload = PLATFORM_CONFIG[selectedPlatform].sampleUpload
+
+    setNotes(window.localStorage.getItem(notesKey) ?? '')
+    const storedLabels = window.localStorage.getItem(labelsKey)
+    if (storedLabels) {
+      try {
+        setContactLabels(JSON.parse(storedLabels) as Record<string, ContactLabel>)
+      } catch {
+        window.localStorage.removeItem(labelsKey)
+        setContactLabels({})
+      }
+    } else {
+      setContactLabels({})
+    }
+
+    setSelectedContact('')
+    setSearchQuery('delete this, Jordan, address')
+    setThreadSearch('')
+    setModalState(null)
+    setAiResult(null)
+    setContactAiError(null)
+    setWorkspaceError(null)
+    setLoadProgress({ percent: 0, label: '' })
+    setStatus(`Loading ${PLATFORM_CONFIG[selectedPlatform].label} workspace...`)
+
+    void loadSnapshot(snapshotKey)
+      .then((snapshot) => {
+        if (snapshot?.uploads?.length) {
+          setUploads(snapshot.uploads)
+          setContactAiResults(snapshot.contactAiResults ?? {})
+          setStatus(
+            `Restored ${snapshot.uploads.length} saved ${PLATFORM_CONFIG[selectedPlatform].label} upload(s) from this browser.`,
+          )
+          return
+        }
+
+        setUploads([sampleUpload])
+        setContactAiResults({})
+        setStatus(`${PLATFORM_CONFIG[selectedPlatform].label} demo workspace loaded.`)
+      })
+      .catch(() => {
+        setUploads([sampleUpload])
+        setContactAiResults({})
+        setStatus(`${PLATFORM_CONFIG[selectedPlatform].label} demo workspace loaded.`)
+      })
+      .finally(() => setIsHydrating(false))
+  }, [selectedPlatform])
+
+  useEffect(() => {
+    if (!selectedPlatform || isHydrating) return
+    window.localStorage.setItem(scopedStorageKey(NOTES_KEY, selectedPlatform), notes)
+  }, [isHydrating, notes, selectedPlatform])
+  useEffect(() => {
+    if (!selectedPlatform || isHydrating) return
+    window.localStorage.setItem(
+      scopedStorageKey(CONTACT_LABELS_KEY, selectedPlatform),
+      JSON.stringify(contactLabels),
+    )
+  }, [contactLabels, isHydrating, selectedPlatform])
   useEffect(
     () => window.sessionStorage.setItem(AI_SETTINGS_KEY, JSON.stringify(aiSettings)),
     [aiSettings],
@@ -699,17 +807,21 @@ export default function App() {
     return () => window.clearTimeout(timeout)
   }, [isLoadingFolder, isLoadingZip, isWorkspaceLoading, loadProgress])
   useEffect(() => {
-    if (isHydrating) return
+    if (isHydrating || !selectedPlatform) return
 
     void saveSnapshot({
       uploads: uploads as ParsedUpload[],
       contactAiResults,
       savedAt: new Date().toISOString(),
-    }).catch(() => {
+    }, scopedStorageKey('workspace', selectedPlatform)).catch(() => {
       setWorkspaceError('Local workspace persistence failed. The dashboard will keep working for this session.')
     })
-  }, [contactAiResults, isHydrating, uploads])
+  }, [contactAiResults, isHydrating, selectedPlatform, uploads])
   useEffect(() => {
+    if (!selectedPlatform) {
+      return
+    }
+
     const worker = workspaceWorkerRef.current
     if (!worker) {
       setWorkspace(buildWorkspaceLite(uploads))
@@ -753,7 +865,7 @@ export default function App() {
     return () => {
       worker.removeEventListener('message', handleMessage as EventListener)
     }
-  }, [uploads])
+  }, [selectedPlatform, uploads])
   useEffect(() => {
     if (!modalState) return
 
@@ -959,24 +1071,26 @@ export default function App() {
 
   function mergeUploads(nextUploads: typeof uploads) {
     setUploads((current) => {
-      const base = current.length === 1 && current[0].upload.id === sampleUpload.upload.id ? [] : current
+      const sampleId = viewerConfig?.sampleUpload.upload.id
+      const base = sampleId && current.length === 1 && current[0].upload.id === sampleId ? [] : current
       return [...base, ...nextUploads]
     })
   }
 
   async function handleZipUpload(event: ChangeEvent<HTMLInputElement>) {
+    if (!viewerConfig) return
     const files = [...(event.target.files ?? [])]
     if (!files.length) return
     setIsLoadingZip(true)
     setError(null)
     setLoadProgress({ percent: 0, label: 'Opening zip export...' })
-    setStatus(`Parsing ${files.length} zip upload${files.length === 1 ? '' : 's'}...`)
+    setStatus(`Parsing ${viewerConfig.label} zip upload${files.length === 1 ? '' : 's'}...`)
 
     try {
       const parsed: ParsedUpload[] = []
 
       for (const [index, file] of files.entries()) {
-        const upload = await parseSnapchatZip(file, (progress) => {
+        const upload = await viewerConfig.parseZip(file, (progress) => {
           const base = (index / files.length) * 100
           const span = 100 / files.length
           setLoadProgress({
@@ -1007,15 +1121,16 @@ export default function App() {
   }
 
   async function handleFolderUpload(event: ChangeEvent<HTMLInputElement>) {
+    if (!viewerConfig) return
     const files = [...(event.target.files ?? [])]
     if (!files.length) return
     setIsLoadingFolder(true)
     setError(null)
     setLoadProgress({ percent: 0, label: 'Scanning extracted export folder...' })
-    setStatus('Parsing extracted export folder and skipping media...')
+    setStatus(viewerConfig.folderStatus)
 
     try {
-      const parsed = await parseSnapchatFileList(files, setLoadProgress)
+      const parsed = await viewerConfig.parseFolder(files, setLoadProgress)
       startTransition(() => {
         mergeUploads([parsed])
         setActiveTab('overview')
@@ -1112,12 +1227,20 @@ export default function App() {
   }
 
   async function handleResetLocalWorkspace() {
-    await clearSnapshot()
-    setUploads([sampleUpload])
+    if (!selectedPlatform || !viewerConfig) return
+    await clearSnapshot(scopedStorageKey('workspace', selectedPlatform))
+    setUploads([viewerConfig.sampleUpload])
     setContactAiResults({})
     setAiResult(null)
     setSelectedContact('')
-    setStatus('Local workspace cleared. Demo workspace loaded.')
+    setStatus(`Local ${viewerConfig.label} workspace cleared. Demo workspace loaded.`)
+  }
+
+  function handlePlatformSelection(platform: Platform) {
+    window.localStorage.setItem(LAST_PLATFORM_KEY, platform)
+    setLastPlatform(platform)
+    setSelectedPlatform(platform)
+    setPlatformPickerOpen(false)
   }
 
   function handleSaveLockCode() {
@@ -1785,6 +1908,48 @@ export default function App() {
     return null
   }
 
+  if (!selectedPlatform || platformPickerOpen) {
+    return (
+      <main className="app-shell">
+        <section className="panel selector-panel">
+          <div>
+            <p className="eyebrow">Viewer selection</p>
+            <h1>Choose a data viewer</h1>
+            <p className="section-copy">
+              Pick the platform first. The app will not load a workspace until you choose one.
+            </p>
+          </div>
+          <div className="selector-grid">
+            {(Object.entries(PLATFORM_CONFIG) as Array<[Platform, (typeof PLATFORM_CONFIG)[Platform]]>).map(
+              ([platform, config]) => (
+                <button
+                  className={`selector-card ${lastPlatform === platform ? 'selector-card-active' : ''}`}
+                  key={platform}
+                  onClick={() => handlePlatformSelection(platform)}
+                  type="button"
+                >
+                  <p className="eyebrow">{config.label}</p>
+                  <h2>{config.heroTitle}</h2>
+                  <p>{config.pickerCopy}</p>
+                  <span className="outline-pill">
+                    {lastPlatform === platform ? 'recently used' : 'start here'}
+                  </span>
+                </button>
+              ),
+            )}
+          </div>
+          {selectedPlatform ? (
+            <div className="button-row">
+              <button className="ghost-button" onClick={() => setPlatformPickerOpen(false)} type="button">
+                Close selector
+              </button>
+            </div>
+          ) : null}
+        </section>
+      </main>
+    )
+  }
+
   if (isLocked) {
     return (
       <main className="app-shell">
@@ -1826,29 +1991,33 @@ export default function App() {
       <main className="app-shell">
         <header className="masthead">
           <div>
-            <p className="eyebrow">Kali-style communication intelligence</p>
-            <h1>Export Viewer Pro</h1>
-            <p className="section-copy">
-              Compact dashboard for Snapchat export review with click-through threads, entity
-              search, timing analysis, and optional AI summarization.
-            </p>
+            <p className="eyebrow">Kali-style communication intelligence / {viewerConfig?.label}</p>
+            <h1>{viewerConfig?.heroTitle ?? 'Export Viewer Pro'}</h1>
+            <p className="section-copy">{viewerConfig?.heroCopy}</p>
           </div>
           <div className="masthead-actions">
             <label className="primary-button file-picker">
               <input accept=".zip" multiple onChange={handleZipUpload} type="file" />
-              {isLoadingZip ? 'Parsing zip...' : 'Upload zip'}
+              {isLoadingZip ? `Parsing ${viewerConfig?.label ?? ''} zip...` : `Upload ${viewerConfig?.label ?? ''} zip`}
             </label>
             <button className="secondary-button" onClick={() => folderInputRef.current?.click()} type="button">
-              {isLoadingFolder ? 'Parsing folder...' : 'Load extracted folder'}
+              {isLoadingFolder ? `Parsing ${viewerConfig?.label ?? ''} folder...` : `Load extracted ${viewerConfig?.label ?? ''} folder`}
             </button>
             <button className="secondary-button" onClick={() => cacheInputRef.current?.click()} type="button">
               Load Python cache
             </button>
-            <button className="ghost-button" onClick={() => setUploads([sampleUpload])} type="button">
+            <button
+              className="ghost-button"
+              onClick={() => viewerConfig && setUploads([viewerConfig.sampleUpload])}
+              type="button"
+            >
               Reset demo
             </button>
             <button className="ghost-button" onClick={() => void handleResetLocalWorkspace()} type="button">
               Clear saved
+            </button>
+            <button className="ghost-button" onClick={() => setPlatformPickerOpen(true)} type="button">
+              Switch viewer
             </button>
             <input
               accept=".json"
@@ -2079,7 +2248,7 @@ export default function App() {
               <article className="panel">
                 <SectionHeader
                   eyebrow="Uploads"
-                  subtitle="Use extracted-folder import for very large exports. It skips media and keeps the data pass responsive."
+                  subtitle={`Use extracted-folder import for very large ${viewerConfig?.label.toLowerCase()} exports. It skips media and keeps the data pass responsive.`}
                   title="Loaded accounts and provenance"
                 />
                 <div className="stack-list scroll-stack">
@@ -2736,7 +2905,7 @@ export default function App() {
                 title="Categories"
               />
               <div className="hero-pills">
-                {SUPPORTED_EXPORT_AREAS.map((label) => (
+                {(viewerConfig?.supportedAreas ?? []).map((label) => (
                   <span className="outline-pill" key={label}>
                     {label}
                   </span>
