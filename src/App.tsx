@@ -53,12 +53,12 @@ const AI_SETTINGS_KEY = 'export-viewer-pro-ai-settings'
 const CONTACT_LABELS_KEY = 'export-viewer-pro-contact-labels'
 const LOCK_CODE_KEY = 'export-viewer-pro-lock-code'
 const DEFAULT_MODELS: Record<AIProvider, string> = {
-  gemini: 'gemini-2.5-flash',
-  openai: 'gpt-5-mini',
+  gemini: 'gemini-2.5-flash-lite',
+  openai: 'gpt-5-nano',
 }
 const MODEL_PRESETS: Record<AIProvider, string[]> = {
-  gemini: ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-flash-latest'],
-  openai: ['gpt-5-mini', 'gpt-5.2', 'gpt-5.1'],
+  gemini: ['gemini-2.5-flash-lite', 'gemini-2.5-flash'],
+  openai: ['gpt-5-nano'],
 }
 const SUPPORTED_EXPORT_AREAS = [
   'Account',
@@ -101,6 +101,24 @@ const THREAD_PAGE_SIZE = 200
 const LARGE_EXPORT_THRESHOLD = 4000
 const CONTACT_AI_QUESTION =
   'Organize this selected thread into a factual timeline, interaction patterns, tone categories, repeated names or references, and open follow-up checks with evidence IDs.'
+
+function estimateTokenCount(events: NormalizedEvent[]) {
+  const joined = events
+    .map((event) => [event.timestamp, event.contact, event.text ?? event.detail ?? event.evidenceText].filter(Boolean).join(' '))
+    .join('\n')
+
+  return Math.max(0, Math.ceil(joined.length / 4))
+}
+
+function clampPercent(value: number) {
+  return Math.max(0, Math.min(100, value))
+}
+
+function isParsedUploadLike(value: unknown): value is ParsedUpload {
+  if (!value || typeof value !== 'object') return false
+  const candidate = value as ParsedUpload
+  return Boolean(candidate.upload && Array.isArray(candidate.fileSummaries) && Array.isArray(candidate.events))
+}
 
 type ContactDateMarker = {
   label: string
@@ -542,10 +560,12 @@ export default function App() {
   const [contactAiResults, setContactAiResults] = useState<Record<string, AIResult>>({})
   const [contactAiError, setContactAiError] = useState<string | null>(null)
   const [isContactAiLoading, setIsContactAiLoading] = useState(false)
+  const [contactAiProgress, setContactAiProgress] = useState({ completed: 0, total: 1, label: '' })
   const [lockDraft, setLockDraft] = useState('')
   const [unlockDraft, setUnlockDraft] = useState('')
   const [isLocked, setIsLocked] = useState(false)
   const folderInputRef = useRef<HTMLInputElement>(null)
+  const cacheInputRef = useRef<HTMLInputElement>(null)
   const workspaceWorkerRef = useRef<Worker | null>(null)
   const workspaceRequestRef = useRef(0)
 
@@ -793,6 +813,18 @@ export default function App() {
     [selectedDateMarkers],
   )
   const selectedContactAiResult = selectedSummary ? contactAiResults[selectedSummary.name] ?? null : null
+  const selectedThreadTokenEstimate = useMemo(
+    () => estimateTokenCount(threadMode === 'chat' ? selectedThread.filter((event) => event.category === 'chat') : selectedThread),
+    [selectedThread, threadMode],
+  )
+  const selectedThreadChunkEstimate = useMemo(
+    () => Math.max(1, Math.ceil(selectedThreadTokenEstimate / 3500)),
+    [selectedThreadTokenEstimate],
+  )
+  const contactAiProgressPercent = useMemo(
+    () => clampPercent((contactAiProgress.completed / Math.max(contactAiProgress.total, 1)) * 100),
+    [contactAiProgress],
+  )
 
   const searchTerms = useMemo(() => queryTermsFromInput(deferredSearchQuery), [deferredSearchQuery])
   const searchHits = useMemo(() => {
@@ -903,6 +935,39 @@ export default function App() {
     }
   }
 
+  async function handleCacheUpload(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0]
+    if (!file) return
+
+    setError(null)
+    setStatus(`Loading cached workspace from ${file.name}...`)
+
+    try {
+      const payload = JSON.parse(await file.text()) as unknown
+      const nextUploads = Array.isArray(payload)
+        ? payload.filter(isParsedUploadLike)
+        : isParsedUploadLike(payload)
+          ? [payload]
+          : Array.isArray((payload as { uploads?: unknown })?.uploads)
+            ? ((payload as { uploads: unknown[] }).uploads.filter(isParsedUploadLike) as ParsedUpload[])
+            : []
+
+      if (!nextUploads.length) {
+        throw new Error('This JSON file does not contain a supported cached upload payload.')
+      }
+
+      setUploads(nextUploads)
+      setContactAiResults({})
+      setStatus(`Loaded cached workspace with ${nextUploads.length} upload(s).`)
+      setActiveTab('chats')
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Cached JSON could not be loaded.')
+      setStatus('Cached JSON load failed.')
+    } finally {
+      event.target.value = ''
+    }
+  }
+
   async function handleAiRun() {
     setIsAiLoading(true)
     setAiError(null)
@@ -921,6 +986,7 @@ export default function App() {
 
     setIsContactAiLoading(true)
     setContactAiError(null)
+    setContactAiProgress({ completed: 0, total: 1, label: 'Preparing selected thread' })
 
     try {
       const result = await runContactAIReview(
@@ -930,6 +996,7 @@ export default function App() {
         selectedThread,
         selectedEntities,
         CONTACT_AI_QUESTION,
+        setContactAiProgress,
       )
 
       setContactAiResults((current) => ({
@@ -939,6 +1006,7 @@ export default function App() {
     } catch (caught) {
       setContactAiError(caught instanceof Error ? caught.message : 'Selected-thread AI analysis failed.')
     } finally {
+      setContactAiProgress((current) => ({ ...current, completed: current.total }))
       setIsContactAiLoading(false)
     }
   }
@@ -1671,12 +1739,22 @@ export default function App() {
             <button className="secondary-button" onClick={() => folderInputRef.current?.click()} type="button">
               {isLoadingFolder ? 'Parsing folder...' : 'Load extracted folder'}
             </button>
+            <button className="secondary-button" onClick={() => cacheInputRef.current?.click()} type="button">
+              Load Python cache
+            </button>
             <button className="ghost-button" onClick={() => setUploads([sampleUpload])} type="button">
               Reset demo
             </button>
             <button className="ghost-button" onClick={() => void handleResetLocalWorkspace()} type="button">
               Clear saved
             </button>
+            <input
+              accept=".json"
+              onChange={handleCacheUpload}
+              ref={cacheInputRef}
+              style={{ display: 'none' }}
+              type="file"
+            />
             <input
               ref={folderInputRef}
               multiple
@@ -1693,6 +1771,11 @@ export default function App() {
             {error ? <p className="error-line">{error}</p> : null}
             {workspaceError ? <p className="error-line">{workspaceError}</p> : null}
             {isWorkspaceLoading ? <p className="loading-line">Organizing export in the background...</p> : null}
+            {isWorkspaceLoading || isLoadingZip || isLoadingFolder ? (
+              <div className="progress-shell" aria-label="Processing progress">
+                <div className="progress-bar indeterminate" />
+              </div>
+            ) : null}
             {requiresAiForDeepReview && !aiSettings.apiKey.trim() ? (
               <p className="loading-line">
                 Large export detected. Paste an API key below to enable deep AI review while the deterministic view stays lightweight.
@@ -1721,7 +1804,7 @@ export default function App() {
             <p className="eyebrow">AI quick setup</p>
             <h2>Paste your key once</h2>
             <p className="section-copy">
-              Use AI for on-demand thread organization, deeper review, and large-export triage. The dashboard still works without it.
+              Default is the cheapest supported model path. Use AI only after you open one contact thread.
             </p>
             <div className="button-row">
               {MODEL_PRESETS[aiSettings.provider].map((model) => (
@@ -2085,14 +2168,30 @@ export default function App() {
                       <div>
                         <h3>Thread intelligence</h3>
                         <p className="section-copy">
-                          Runs only on the selected contact thread using your current provider and model.
+                          Runs only on the selected contact thread using the cheapest configured model.
                         </p>
                       </div>
                       <span className="outline-pill">
                         {aiSettings.provider} / {aiSettings.model}
                       </span>
                     </div>
+                    <div className="score-row">
+                      <span className="outline-pill">{selectedThread.length} linked rows</span>
+                      <span className="outline-pill">{selectedThreadTokenEstimate.toLocaleString()} est. tokens</span>
+                      <span className="outline-pill">{selectedThreadChunkEstimate} AI chunk{selectedThreadChunkEstimate === 1 ? '' : 's'}</span>
+                    </div>
                     {contactAiError ? <p className="error-line">{contactAiError}</p> : null}
+                    {isContactAiLoading ? (
+                      <div className="ai-progress-card">
+                        <div className="result-meta">
+                          <span>{contactAiProgress.label || 'Organizing selected thread'}</span>
+                          <span>{contactAiProgressPercent.toFixed(0)}%</span>
+                        </div>
+                        <div className="progress-shell" aria-label="AI progress">
+                          <div className="progress-bar" style={{ width: `${contactAiProgressPercent}%` }} />
+                        </div>
+                      </div>
+                    ) : null}
                     {selectedContactAiResult ? (
                       <div className="ai-result">
                         <div className="result-meta">

@@ -25,6 +25,7 @@ A privacy-first web dashboard for reviewing communication exports that an accoun
 6. Browse full contact threads in a chat-first layout with manual local grouping labels.
 7. Search custom keywords or phrases across all chat text.
 8. Import either zip exports or extracted export folders, with folder mode skipping media files.
+9. Load a Python-preprocessed cache JSON for very large exports.
 9. Export normalized events, contacts, keyword matches, and a structured workspace report.
 10. Run optional browser-side AI review using Gemini or OpenAI with a user-provided API key.
 
@@ -79,6 +80,22 @@ npm run dev
 ```bash
 npm run build
 ```
+
+## Faster local preprocessing for huge exports
+
+For very large extracted exports, preprocess the folder once with Python and then load the generated JSON cache in the dashboard with `Load Python cache`.
+
+```bash
+python scripts/preprocess_snapchat_export.py "C:\path\to\extracted\snapchat-export"
+```
+
+Default output:
+
+```text
+%USERPROFILE%\Desktop\snapchat_export_cache.json
+```
+
+That path avoids reparsing the raw export in the browser on every refresh.
 
 ## Free hosting with GitHub Pages
 

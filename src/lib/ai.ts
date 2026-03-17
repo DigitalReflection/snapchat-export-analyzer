@@ -7,6 +7,8 @@ import type {
   WorkspaceDataset,
 } from '../types'
 
+type ProgressHandler = (progress: { completed: number; total: number; label: string }) => void
+
 type APIErrorPayload = {
   error?: {
     message?: string
@@ -458,6 +460,7 @@ export async function runContactAIReview(
   events: NormalizedEvent[],
   entities: EntitySummary[],
   question: string,
+  onProgress?: ProgressHandler,
 ): Promise<AIResult> {
   if (!settings.apiKey.trim()) {
     throw new Error('Enter an API key before running AI analysis.')
@@ -468,20 +471,33 @@ export async function runContactAIReview(
   let answer = ''
 
   if (chunks.length <= 1) {
+    onProgress?.({ completed: 0, total: 1, label: 'Preparing selected thread' })
     const prompt = `${buildContactPrompt(workspace, contact, events, entities, question)}\n\nThread rows:\n${chunks[0] ?? ''}`
     answer = await runProvider(prompt)
+    onProgress?.({ completed: 1, total: 1, label: 'Selected thread organized' })
   } else {
     const chunkFindings: string[] = []
+    onProgress?.({ completed: 0, total: chunks.length + 1, label: 'Preparing selected thread' })
 
     for (const [index, chunk] of chunks.entries()) {
       chunkFindings.push(
         await runProvider(buildContactChunkPrompt(question, contact.name, chunk, index, chunks.length)),
       )
+      onProgress?.({
+        completed: index + 1,
+        total: chunks.length + 1,
+        label: `Processed chunk ${index + 1} of ${chunks.length}`,
+      })
     }
 
     answer = await runProvider(
       buildContactSynthesisPrompt(workspace, contact, events, entities, question, chunkFindings),
     )
+    onProgress?.({
+      completed: chunks.length + 1,
+      total: chunks.length + 1,
+      label: 'Selected thread organized',
+    })
   }
 
   if (!answer) {
