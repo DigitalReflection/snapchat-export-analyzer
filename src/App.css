@@ -350,6 +350,13 @@
   gap: 0.9rem;
 }
 
+.chat-sidebar {
+  position: sticky;
+  top: 1rem;
+  align-self: start;
+  max-height: calc(100vh - 2rem);
+}
+
 .detail-duo-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
@@ -410,6 +417,98 @@
 
 .main-thread-scroll {
   max-height: 48vh;
+}
+
+.conversation-list {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.conversation-item {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.thread-day-separator {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  width: fit-content;
+  margin: 0 auto;
+  padding: 0.25rem 0.7rem;
+  border-radius: 999px;
+  background: rgba(17, 31, 46, 0.96);
+  border: 1px solid rgba(92, 176, 255, 0.22);
+  color: #8ec9ff;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.message-row {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.message-row.role-self {
+  justify-self: end;
+  width: min(82%, 100%);
+}
+
+.message-row.role-contact,
+.message-row.role-system {
+  justify-self: start;
+  width: min(82%, 100%);
+}
+
+.message-headline {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  align-items: center;
+  color: #98adc2;
+  font-size: 0.8rem;
+}
+
+.message-timestamp {
+  white-space: nowrap;
+}
+
+.message-bubble {
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.9rem 1rem;
+  border-radius: 18px;
+  border: 1px solid rgba(108, 255, 193, 0.12);
+  background: rgba(9, 16, 24, 0.92);
+}
+
+.message-row.role-self .message-bubble {
+  background: linear-gradient(180deg, rgba(17, 42, 33, 0.96), rgba(11, 29, 22, 0.94));
+  border-color: rgba(92, 255, 186, 0.2);
+}
+
+.message-row.role-system .message-bubble {
+  background: linear-gradient(180deg, rgba(20, 24, 33, 0.96), rgba(16, 20, 29, 0.94));
+  border-color: rgba(142, 201, 255, 0.18);
+}
+
+.message-actor {
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  color: #7fe3ff;
+}
+
+.message-copy {
+  white-space: pre-wrap;
+  line-height: 1.62;
+  word-break: break-word;
+  color: #f2f7fd;
+}
+
+.message-source-line {
+  color: #7c94ab;
+  font-size: 0.75rem;
 }
 
 .contact-table {
@@ -555,6 +654,8 @@
   border-radius: 12px;
   background: rgba(2, 7, 11, 0.88);
   border: 1px solid rgba(111, 255, 190, 0.12);
+  white-space: pre-wrap;
+  line-height: 1.6;
 }
 
 .json-block,
@@ -617,6 +718,7 @@ mark {
   .section-heading,
   .thread-toolbar,
   .thread-header-row,
+  .message-headline,
   .modal-toolbar,
   .list-head,
   .message-meta,
@@ -632,5 +734,11 @@ mark {
 
   .modal-shell {
     max-height: calc(100vh - 1rem);
+  }
+
+  .message-row.role-self,
+  .message-row.role-contact,
+  .message-row.role-system {
+    width: 100%;
   }
 }

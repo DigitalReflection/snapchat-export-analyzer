@@ -16,6 +16,7 @@ import type {
   ContactSummary,
   FileSummary,
   NormalizedEvent,
+  UploadSummary,
 } from './types'
 import { runAIReview } from './lib/ai'
 import {
@@ -98,6 +99,8 @@ type ContactDateMarker = {
   event: NormalizedEvent
 }
 
+type ConversationRole = 'self' | 'contact' | 'system'
+
 function formatDate(value: string | null) {
   if (!value) return 'Unknown'
   const date = new Date(value)
@@ -110,6 +113,33 @@ function formatDay(value: string | null) {
   return Number.isNaN(date.getTime())
     ? 'Unknown'
     : date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+}
+
+function formatThreadDay(value: string | null) {
+  if (!value) return 'Unknown day'
+  const date = new Date(value)
+  return Number.isNaN(date.getTime())
+    ? 'Unknown day'
+    : date.toLocaleDateString(undefined, {
+        weekday: 'long',
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+      })
+}
+
+function formatThreadTimestamp(value: string | null) {
+  if (!value) return 'Unknown time'
+  const date = new Date(value)
+  return Number.isNaN(date.getTime())
+    ? 'Unknown time'
+    : date.toLocaleString(undefined, {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+      })
 }
 
 function formatBytes(bytes: number) {
@@ -126,6 +156,16 @@ function formatBytes(bytes: number) {
 
 function compact(value: string | null | undefined) {
   return (value ?? '').replace(/\s+/g, ' ').trim()
+}
+
+function preserveBodyText(value: string | null | undefined) {
+  if (!value) return ''
+  return value
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
 }
 
 function escapeRegExp(value: string) {
@@ -174,7 +214,20 @@ function isMediaEvent(event: NormalizedEvent) {
 }
 
 function eventSummaryText(event: NormalizedEvent) {
-  return compact(event.text ?? event.detail ?? event.locationName ?? event.evidenceText) || 'No visible text for this row.'
+  const primary = preserveBodyText(event.text)
+  if (primary) {
+    return primary
+  }
+
+  const detailLines = [event.detail, event.locationName, event.device, event.region]
+    .map((value) => preserveBodyText(value))
+    .filter(Boolean)
+
+  if (detailLines.length) {
+    return detailLines.join('\n')
+  }
+
+  return preserveBodyText(event.evidenceText) || 'No visible text for this row.'
 }
 
 function sortedDatedEvents(events: NormalizedEvent[]) {
@@ -231,6 +284,99 @@ function buildDateMarkers(events: NormalizedEvent[]) {
     }
     return markers
   })
+}
+
+function extractActorValue(event: NormalizedEvent) {
+  const keys = ['sender', 'from', 'author', 'participant', 'display_name', 'user', 'username']
+  for (const key of keys) {
+    const value = event.attributes[key]
+    if (typeof value === 'string' && value.trim()) {
+      return value.trim()
+    }
+  }
+  return null
+}
+
+function normalizeAlias(value: string) {
+  return value.toLowerCase().trim()
+}
+
+function buildAliasIndex(uploads: UploadSummary[]) {
+  return new Map(
+    uploads.map((upload) => {
+      const values = [
+        upload.account.username,
+        upload.account.displayName,
+        upload.account.email,
+        upload.account.phone,
+        ...upload.account.aliases,
+      ]
+        .filter((value): value is string => Boolean(value))
+        .map((value) => normalizeAlias(value))
+
+      return [upload.id, new Set(values)] as const
+    }),
+  )
+}
+
+function resolveConversationRole(event: NormalizedEvent, aliasIndex: Map<string, Set<string>>): ConversationRole {
+  if (event.category !== 'chat') {
+    return 'system'
+  }
+
+  const actor = extractActorValue(event)
+  if (!actor) {
+    return 'contact'
+  }
+
+  const aliases = aliasIndex.get(event.uploadId)
+  return aliases?.has(normalizeAlias(actor)) ? 'self' : 'contact'
+}
+
+function ConversationList(props: {
+  aliasIndex: Map<string, Set<string>>
+  events: NormalizedEvent[]
+  onEventClick: (eventId: string) => void
+  terms: string[]
+}) {
+  return (
+    <div className="conversation-list">
+      {props.events.map((event, index) => {
+        const dayKey = event.timestamp?.slice(0, 10) ?? `undated-${event.id}`
+        const previousDayKey =
+          props.events[index - 1]?.timestamp?.slice(0, 10) ?? `undated-${props.events[index - 1]?.id ?? 'start'}`
+        const showDay = index === 0 || dayKey !== previousDayKey
+        const role = resolveConversationRole(event, props.aliasIndex)
+
+        return (
+          <div className={`conversation-item role-${role}`} key={event.id}>
+            {showDay ? <div className="thread-day-separator">{formatThreadDay(event.timestamp)}</div> : null}
+            <button
+              className={`message-row role-${role}`}
+              onClick={() => props.onEventClick(event.id)}
+              type="button"
+            >
+              <div className="message-headline">
+                <span className="message-type">{event.category}</span>
+                <span className="message-timestamp">{formatThreadTimestamp(event.timestamp)}</span>
+              </div>
+              <div className="message-bubble">
+                <span className="message-actor">
+                  {extractActorValue(event) ?? (role === 'self' ? 'You' : event.contact ?? 'Unknown')}
+                </span>
+                <span className="message-copy">
+                  <HighlightedText terms={props.terms} text={eventSummaryText(event)} />
+                </span>
+              </div>
+              <span className="message-source-line mono">
+                [{event.id}] {event.sourceFile}
+              </span>
+            </button>
+          </div>
+        )
+      })}
+    </div>
+  )
 }
 
 function scoreLabel(score: number) {
@@ -442,6 +588,7 @@ export default function App() {
     () => new Map(workspace.uploads.map((upload) => [upload.id, upload])),
     [workspace.uploads],
   )
+  const aliasIndex = useMemo(() => buildAliasIndex(workspace.uploads), [workspace.uploads])
   const signalIndex = useMemo(
     () => new Map(workspace.signals.map((signal) => [signal.id, signal])),
     [workspace.signals],
@@ -514,6 +661,10 @@ export default function App() {
       return threadTerms.some((term) => haystack.includes(term))
     })
   }, [deferredThreadSearch, selectedThread, threadMode])
+  const selectedThreadTerms = useMemo(
+    () => queryTermsFromInput(deferredThreadSearch),
+    [deferredThreadSearch],
+  )
 
   const selectedDateMarkers = useMemo(() => buildDateMarkers(selectedThread), [selectedThread])
   const selectedMediaEvents = useMemo(
@@ -1041,27 +1192,12 @@ export default function App() {
               </div>
 
               <div className="thread-scroll">
-                {visibleThread.map((event) => {
-                  return (
-                    <button
-                      className="message-row"
-                      key={event.id}
-                      onClick={() => setModalState({ type: 'event', eventId: event.id })}
-                      type="button"
-                    >
-                      <div className="message-meta">
-                        <span className="message-type">{event.category}</span>
-                        <span>{formatDate(event.timestamp)}</span>
-                      </div>
-                      <p>
-                        <HighlightedText terms={modalTerms} text={eventSummaryText(event)} />
-                      </p>
-                      <span className="mono">
-                        [{event.id}] {event.sourceFile}
-                      </span>
-                    </button>
-                  )
-                })}
+                <ConversationList
+                  aliasIndex={aliasIndex}
+                  events={visibleThread}
+                  onEventClick={(eventId) => setModalState({ type: 'event', eventId })}
+                  terms={modalTerms}
+                />
                 {visibleThread.length === 0 ? (
                   <p className="empty-state">No rows matched the current thread filter.</p>
                 ) : null}
@@ -1098,9 +1234,7 @@ export default function App() {
             </article>
             <article className="modal-card">
               <h4>Full text</h4>
-              <p className="raw-block">
-                {compact(event.text ?? event.detail ?? event.evidenceText) || 'No visible text.'}
-              </p>
+              <p className="raw-block">{eventSummaryText(event)}</p>
               <h4>Raw fields</h4>
               <pre className="json-block">{JSON.stringify(event.attributes, null, 2)}</pre>
             </article>
@@ -1639,23 +1773,12 @@ export default function App() {
                       />
                     </label>
                     <div className="thread-scroll main-thread-scroll">
-                      {selectedVisibleThread.map((event) => (
-                        <button
-                          className="message-row"
-                          key={event.id}
-                          onClick={() => setModalState({ type: 'event', eventId: event.id })}
-                          type="button"
-                        >
-                          <div className="message-meta">
-                            <span className="message-type">{event.category}</span>
-                            <span>{formatDate(event.timestamp)}</span>
-                          </div>
-                          <p>{eventSummaryText(event)}</p>
-                          <span className="mono">
-                            [{event.id}] {event.sourceFile}
-                          </span>
-                        </button>
-                      ))}
+                      <ConversationList
+                        aliasIndex={aliasIndex}
+                        events={selectedVisibleThread}
+                        onEventClick={(eventId) => setModalState({ type: 'event', eventId })}
+                        terms={selectedThreadTerms}
+                      />
                       {selectedVisibleThread.length === 0 ? (
                         <p className="empty-state">No parsed rows matched this thread view.</p>
                       ) : null}
