@@ -67,8 +67,11 @@ const HTML_NOISE_TERMS = new Set([
   'support history',
   'user & public profiles',
 ])
-const SNAPCHAT_TRANSCRIPT_PATTERN =
-  /(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC)(Saved|Opened|Received|Delivered|Sent)?([A-Za-z0-9._-]{2,40})?(TEXT|MEDIA|CALL|NOTE)?/g
+const SNAPCHAT_TIMESTAMP_PATTERN = /\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC/g
+const SNAPCHAT_TRANSCRIPT_STATUSES = ['Saved', 'Opened', 'Received', 'Delivered', 'Sent'] as const
+const SNAPCHAT_TRANSCRIPT_MARKERS = ['TEXT', 'MEDIA', 'CALL', 'NOTE'] as const
+const EMBEDDED_TRANSCRIPT_PATTERN =
+  /UTC(Saved|Opened|Received|Delivered|Sent)([A-Za-z0-9._-]{2,40})(TEXT|MEDIA|CALL|NOTE)/g
 
 function slugify(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, '-')
@@ -221,39 +224,101 @@ function buildHtmlLineRecords(content: string) {
 }
 
 function extractTranscriptRecords(content: string) {
-  const matches = [...content.matchAll(SNAPCHAT_TRANSCRIPT_PATTERN)]
+  const matches = [...content.matchAll(SNAPCHAT_TIMESTAMP_PATTERN)]
   if (matches.length < 2 && !content.includes('TEXT')) {
     return []
   }
 
   const records: FlatRecord[] = []
 
+  function pushTranscriptParts(timestamp: string, status: string | null, contact: string, marker: string, message: string) {
+    const embedded = [...message.matchAll(EMBEDDED_TRANSCRIPT_PATTERN)]
+    if (!embedded.length) {
+      records.push({
+        timestamp,
+        status: status ?? 'Saved',
+        contact,
+        marker,
+        message,
+      })
+      return
+    }
+
+    let previousIndex = 0
+    embedded.forEach((match, index) => {
+      const start = match.index ?? 0
+      const firstChunk = message.slice(previousIndex, start).replace(/\s+/g, ' ').trim()
+      if (index === 0 && firstChunk) {
+        records.push({
+          timestamp,
+          status: status ?? 'Saved',
+          contact,
+          marker,
+          message: firstChunk,
+        })
+      }
+
+      const nextStart = embedded[index + 1]?.index ?? message.length
+      const nestedMessage = message
+        .slice(start + match[0].length, nextStart)
+        .replace(/^[,:;\s"'`]+/, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+
+      if (nestedMessage) {
+        records.push({
+          timestamp,
+          status: match[1] ?? 'Saved',
+          contact: match[2] ?? contact,
+          marker: match[3] ?? marker,
+          message: nestedMessage,
+        })
+      }
+
+      previousIndex = nextStart
+    })
+  }
+
   matches.forEach((match, index) => {
-    const fullMatch = match[0]
+    const timestamp = match[0]?.trim() ?? null
     const start = match.index ?? 0
     const nextStart = matches[index + 1]?.index ?? content.length
-    const timestamp = match[1]?.trim() ?? null
-    const status = match[2]?.trim() ?? null
-    const contact = match[3]?.trim() ?? null
-    const marker = match[4]?.trim() ?? null
+    let segment = content
+      .slice(start + (match[0]?.length ?? 0), nextStart)
+      .replace(/^[,:;\s"'`]+/, '')
+      .trim()
 
-    let message = content.slice(start + fullMatch.length, nextStart)
+    if (!timestamp || !segment) {
+      return
+    }
+
+    let status: string | null = null
+    for (const candidate of SNAPCHAT_TRANSCRIPT_STATUSES) {
+      if (segment.startsWith(candidate)) {
+        status = candidate
+        segment = segment.slice(candidate.length).trim()
+        break
+      }
+    }
+
+    const marker = SNAPCHAT_TRANSCRIPT_MARKERS.find((candidate) => segment.includes(candidate)) ?? null
+    if (!marker) {
+      return
+    }
+
+    const markerIndex = segment.indexOf(marker)
+    const contact = segment.slice(0, markerIndex).trim()
+    let message = segment.slice(markerIndex + marker.length)
     message = message
       .replace(/^[,:;\s"'`]+/, '')
       .replace(/\s+/g, ' ')
       .trim()
 
-    if (!timestamp || !contact || !message) {
+    if (!contact || !message) {
       return
     }
 
-    records.push({
-      timestamp,
-      status: status ?? 'Saved',
-      contact,
-      marker: marker ?? 'TEXT',
-      message,
-    })
+    pushTranscriptParts(timestamp, status, contact, marker ?? 'TEXT', message)
   })
 
   return records
