@@ -1,5 +1,6 @@
 import type {
   ContactSummary,
+  DataCategory,
   DatasetStats,
   EntitySummary,
   EvidenceSnippet,
@@ -19,29 +20,135 @@ import type {
 
 const DAY_IN_MS = 24 * 60 * 60 * 1000
 const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+const CONTACT_CATEGORIES = new Set<DataCategory>(['chat', 'friend', 'search', 'unknown'])
+const USERNAME_HINT = /[@._\d]/
+const NAME_STOPWORDS = new Set([
+  'Monday',
+  'Tuesday',
+  'Wednesday',
+  'Thursday',
+  'Friday',
+  'Saturday',
+  'Sunday',
+  'Delete This',
+  'Keep This',
+  'Snap Chat',
+])
+const PHRASE_STOPWORDS = new Set([
+  'the',
+  'and',
+  'for',
+  'you',
+  'with',
+  'that',
+  'this',
+  'from',
+  'have',
+  'your',
+  'just',
+  'been',
+  'were',
+  'about',
+  'they',
+  'what',
+  'when',
+  'there',
+  'then',
+  'them',
+  'dont',
+  'will',
+])
+const DELETION_KEYWORDS = [
+  'delete',
+  'deleted',
+  'remove',
+  'removed',
+  'unsave',
+  'unsaved',
+  'clear chat',
+  'cleared',
+  'blocked',
+  'unfriend',
+  'unfriended',
+  'unadd',
+  'unadded',
+  'removed friend',
+  'deleted friend',
+]
 
 const TONE_RULES = [
   {
     category: 'affection',
     label: 'Affection indicators',
-    phrases: ['miss you', 'thinking about you', 'wish you were here', 'love you'],
+    phrases: [
+      'miss you',
+      'thinking about you',
+      'wish you were here',
+      'love you',
+      'miss you already',
+    ],
   },
   {
     category: 'secrecy',
     label: 'Secrecy indicators',
-    phrases: ['delete this', "don't tell", 'keep this between us', 'do not tell'],
+    phrases: [
+      'delete this',
+      "don't tell",
+      'keep this between us',
+      'do not tell',
+      'clear this chat',
+    ],
   },
   {
     category: 'planning',
     label: 'Private planning indicators',
-    phrases: ['come over', 'when can i see you', 'meet me', 'are you free'],
+    phrases: [
+      'come over',
+      'when can i see you',
+      'meet me',
+      'are you free',
+      'send me the address',
+    ],
   },
   {
     category: 'romantic',
     label: 'Romantic tone indicators',
-    phrases: ['beautiful', 'cute', 'want you', 'thinking of you'],
+    phrases: [
+      'beautiful',
+      'cute',
+      'want you',
+      'thinking of you',
+      'wish you were here',
+    ],
   },
 ]
+
+type ActivityBuckets = {
+  hourBuckets: HourBucket[]
+  weekdayBuckets: WeekdayBucket[]
+  heatmap: HeatmapCell[]
+}
+
+type InternalContact = {
+  name: string
+  interactions: number
+  messageCount: number
+  searchCount: number
+  friendEventCount: number
+  lateNightInteractions: number
+  uploads: Set<string>
+  activeDays: Set<string>
+  firstSeen: string | null
+  lastSeen: string | null
+  recentCount: number
+  previousCount: number
+  deletionIndicators: number
+  categoryCounts: Partial<Record<DataCategory, number>>
+  evidenceIds: string[]
+  hourCounts: number[]
+  weekdayCounts: number[]
+  phraseCounts: Map<string, number>
+}
 
 function safeDate(value: string | null) {
   if (!value) {
@@ -67,13 +174,17 @@ function compact(text: string) {
   return text.replace(/\s+/g, ' ').trim()
 }
 
+function clampScore(value: number) {
+  return Math.max(1, Math.min(10, Math.round(value)))
+}
+
 function buildExcerpt(text: string | null) {
   const input = compact(text ?? '')
   if (!input) {
     return 'No text excerpt available.'
   }
 
-  return input.length > 140 ? `${input.slice(0, 137)}...` : input
+  return input.length > 160 ? `${input.slice(0, 157)}...` : input
 }
 
 function recentWindowBounds(events: NormalizedEvent[]) {
@@ -98,6 +209,37 @@ function extractMatches(text: string) {
     links: [...text.matchAll(/https?:\/\/[^\s]+/gi)].map((match) => match[0]),
     handles: [...text.matchAll(/@[a-z0-9._]{2,}/gi)].map((match) => match[0]),
   }
+}
+
+function extractNameMatches(text: string) {
+  return [...text.matchAll(/\b([A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,}){1,2})\b/g)]
+    .map((match) => match[1].trim())
+    .filter((value) => !NAME_STOPWORDS.has(value))
+}
+
+function looksLikeUsername(value: string) {
+  return USERNAME_HINT.test(value) || !value.includes(' ')
+}
+
+function extractPhrases(text: string | null) {
+  const normalized = normalizeText(text)
+  if (!normalized) {
+    return []
+  }
+
+  const words = normalized
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter((word) => word.length > 2 && !PHRASE_STOPWORDS.has(word))
+
+  const phrases: string[] = []
+  for (let index = 0; index < words.length - 1; index += 1) {
+    const phrase = `${words[index]} ${words[index + 1]}`
+    if (phrase.length >= 6) {
+      phrases.push(phrase)
+    }
+  }
+  return phrases
 }
 
 function pushEntity(
@@ -134,6 +276,14 @@ function pushEntity(
   }
 
   index.set(key, current)
+}
+
+function matchesDeletionIndicator(event: NormalizedEvent) {
+  const haystack = normalizeText(
+    [event.text, event.detail, event.subtype, event.evidenceText, event.sourceFile].filter(Boolean).join(' '),
+  )
+
+  return DELETION_KEYWORDS.some((keyword) => haystack.includes(keyword))
 }
 
 function collectKeywordHits(events: NormalizedEvent[]) {
@@ -191,156 +341,11 @@ function buildToneSummaries(keywordHits: KeywordHit[]) {
   return [...byTone.values()].sort((left, right) => right.count - left.count)
 }
 
-function buildContacts(events: NormalizedEvent[], keywordHits: KeywordHit[]) {
-  const hitsByContact = new Map<string, KeywordHit[]>()
-  keywordHits.forEach((hit) => {
-    const existing = hitsByContact.get(hit.contact) ?? []
-    existing.push(hit)
-    hitsByContact.set(hit.contact, existing)
-  })
-
-  const { recentStart, previousStart } = recentWindowBounds(events)
-  const index = new Map<string, ContactSummary>()
-
-  events.forEach((event) => {
-    if (!event.contact) {
-      return
-    }
-
-    const contact = event.contact
-    const current = index.get(contact) ?? {
-      name: contact,
-      interactions: 0,
-      messageCount: 0,
-      searchCount: 0,
-      lateNightInteractions: 0,
-      keywordHits: hitsByContact.get(contact)?.length ?? 0,
-      uploads: 0,
-      activeDays: 0,
-      firstSeen: event.timestamp,
-      lastSeen: event.timestamp,
-      recentChange: 0,
-      topToneLabels: [],
-      evidenceIds: [],
-    }
-
-    current.interactions += 1
-
-    if (event.category === 'chat') {
-      current.messageCount += 1
-    }
-    if (event.category === 'search') {
-      current.searchCount += 1
-    }
-
-    const date = safeDate(event.timestamp)
-    if (date) {
-      const hour = date.getHours()
-      if (hour >= 23 || hour <= 5) {
-        current.lateNightInteractions += 1
-      }
-      if (!current.firstSeen || date < new Date(current.firstSeen)) {
-        current.firstSeen = event.timestamp
-      }
-      if (!current.lastSeen || date > new Date(current.lastSeen)) {
-        current.lastSeen = event.timestamp
-      }
-    }
-
-    if (!current.evidenceIds.includes(event.id)) {
-      current.evidenceIds.push(event.id)
-    }
-
-    index.set(contact, current)
-  })
-
-  return [...index.values()]
-    .map((contact) => {
-      const contactEvents = events.filter((event) => event.contact === contact.name)
-      const uploadCount = new Set(contactEvents.map((event) => event.uploadId)).size
-      const activeDays = new Set(
-        contactEvents
-          .map((event) => event.timestamp?.slice(0, 10))
-          .filter((value): value is string => Boolean(value)),
-      ).size
-      const recentCount = contactEvents.filter((event) => {
-        const date = safeDate(event.timestamp)
-        return date ? date.getTime() >= recentStart : false
-      }).length
-      const previousCount = contactEvents.filter((event) => {
-        const date = safeDate(event.timestamp)
-        return date
-          ? date.getTime() >= previousStart && date.getTime() < recentStart
-          : false
-      }).length
-      const topToneLabels = TONE_RULES.filter((rule) =>
-        keywordHits.some(
-          (hit) => hit.contact === contact.name && hit.category === rule.category,
-        ),
-      ).map((rule) => rule.label)
-
-      return {
-        ...contact,
-        uploads: uploadCount,
-        activeDays,
-        recentChange: recentCount - previousCount,
-        topToneLabels,
-      }
-    })
-    .sort((left, right) => right.interactions - left.interactions)
-}
-
-function buildEntities(events: NormalizedEvent[]) {
-  const entityIndex = new Map<string, EntitySummary>()
-
-  events.forEach((event) => {
-    const text = compact(
-      [event.contact, event.text, event.detail, event.locationName, event.region]
-        .filter(Boolean)
-        .join(' '),
-    )
-
-    if (event.contact) {
-      pushEntity(entityIndex, 'person', event.contact, event)
-      pushEntity(entityIndex, 'username', event.contact, event)
-    }
-    if (event.locationName) {
-      pushEntity(entityIndex, 'location', event.locationName, event)
-    }
-
-    const matches = extractMatches(text)
-    matches.emails.forEach((value) => pushEntity(entityIndex, 'email', value, event))
-    matches.phones.forEach((value) => pushEntity(entityIndex, 'phone', value, event))
-    matches.links.forEach((value) => pushEntity(entityIndex, 'link', value, event))
-    matches.handles.forEach((value) => pushEntity(entityIndex, 'handle', value, event))
-  })
-
-  return [...entityIndex.values()]
-    .filter((entity) => entity.count > 0)
-    .sort((left, right) => right.count - left.count)
-}
-
 function buildRepeatedPhrases(events: NormalizedEvent[]) {
   const counts = new Map<string, PhrasePattern>()
-  const stopwords = new Set(['the', 'and', 'for', 'you', 'with', 'that', 'this', 'from'])
 
   events.forEach((event) => {
-    const text = normalizeText(event.text)
-    if (!text) {
-      return
-    }
-
-    const words = text
-      .replace(/[^a-z0-9\s]/g, ' ')
-      .split(/\s+/)
-      .filter((word) => word.length > 2 && !stopwords.has(word))
-
-    for (let index = 0; index < words.length - 1; index += 1) {
-      const phrase = `${words[index]} ${words[index + 1]}`
-      if (phrase.length < 6) {
-        continue
-      }
-
+    extractPhrases(event.text).forEach((phrase) => {
       const current = counts.get(phrase) ?? {
         phrase,
         count: 0,
@@ -357,13 +362,255 @@ function buildRepeatedPhrases(events: NormalizedEvent[]) {
       }
 
       counts.set(phrase, current)
-    }
+    })
   })
 
   return [...counts.values()]
     .filter((phrase) => phrase.count > 1)
     .sort((left, right) => right.count - left.count)
-    .slice(0, 12)
+    .slice(0, 18)
+}
+
+function buildActivityBuckets(events: NormalizedEvent[]): ActivityBuckets {
+  const hourCounts = Array.from({ length: 24 }, () => 0)
+  const weekdayCounts = Array.from({ length: 7 }, () => 0)
+  const heatmapCounts = Array.from({ length: 7 }, () => Array.from({ length: 24 }, () => 0))
+
+  events.forEach((event) => {
+    const date = safeDate(event.timestamp)
+    if (!date) {
+      return
+    }
+
+    const day = date.getDay()
+    const hour = date.getHours()
+    hourCounts[hour] += 1
+    weekdayCounts[day] += 1
+    heatmapCounts[day][hour] += 1
+  })
+
+  return {
+    hourBuckets: hourCounts.map((count, hour) => ({ hour, count })),
+    weekdayBuckets: weekdayCounts.map((count, day) => ({
+      day,
+      label: WEEKDAY_LABELS[day],
+      count,
+    })),
+    heatmap: heatmapCounts.flatMap((hours, day) =>
+      hours.map((count, hour) => ({
+        day,
+        hour,
+        count,
+      })),
+    ),
+  }
+}
+
+function topHourFromCounts(counts: number[]) {
+  let topHour: number | null = null
+  let topCount = 0
+
+  counts.forEach((count, hour) => {
+    if (count > topCount) {
+      topCount = count
+      topHour = hour
+    }
+  })
+
+  return topCount > 0 ? topHour : null
+}
+
+function topWeekdayFromCounts(counts: number[]) {
+  let topDay: number | null = null
+  let topCount = 0
+
+  counts.forEach((count, day) => {
+    if (count > topCount) {
+      topCount = count
+      topDay = day
+    }
+  })
+
+  return topCount > 0 && topDay !== null ? WEEKDAY_LABELS[topDay] : null
+}
+
+function buildContacts(events: NormalizedEvent[], keywordHits: KeywordHit[]) {
+  const hitsByContact = new Map<string, KeywordHit[]>()
+  keywordHits.forEach((hit) => {
+    const existing = hitsByContact.get(hit.contact) ?? []
+    existing.push(hit)
+    hitsByContact.set(hit.contact, existing)
+  })
+
+  const { recentStart, previousStart } = recentWindowBounds(events)
+  const index = new Map<string, InternalContact>()
+
+  events.forEach((event) => {
+    if (!event.contact || !CONTACT_CATEGORIES.has(event.category)) {
+      return
+    }
+
+    const current = index.get(event.contact) ?? {
+      name: event.contact,
+      interactions: 0,
+      messageCount: 0,
+      searchCount: 0,
+      friendEventCount: 0,
+      lateNightInteractions: 0,
+      uploads: new Set<string>(),
+      activeDays: new Set<string>(),
+      firstSeen: null,
+      lastSeen: null,
+      recentCount: 0,
+      previousCount: 0,
+      deletionIndicators: 0,
+      categoryCounts: {},
+      evidenceIds: [],
+      hourCounts: Array.from({ length: 24 }, () => 0),
+      weekdayCounts: Array.from({ length: 7 }, () => 0),
+      phraseCounts: new Map<string, number>(),
+    }
+
+    current.interactions += 1
+    current.uploads.add(event.uploadId)
+    current.categoryCounts[event.category] = (current.categoryCounts[event.category] ?? 0) + 1
+
+    if (event.category === 'chat') {
+      current.messageCount += 1
+    }
+    if (event.category === 'search') {
+      current.searchCount += 1
+    }
+    if (event.category === 'friend') {
+      current.friendEventCount += 1
+    }
+    if (matchesDeletionIndicator(event)) {
+      current.deletionIndicators += 1
+    }
+    if (!current.evidenceIds.includes(event.id)) {
+      current.evidenceIds.push(event.id)
+    }
+
+    extractPhrases(event.text).forEach((phrase) => {
+      current.phraseCounts.set(phrase, (current.phraseCounts.get(phrase) ?? 0) + 1)
+    })
+
+    const date = safeDate(event.timestamp)
+    if (!date) {
+      index.set(event.contact, current)
+      return
+    }
+
+    const dayKey = date.toISOString().slice(0, 10)
+    current.activeDays.add(dayKey)
+    current.hourCounts[date.getHours()] += 1
+    current.weekdayCounts[date.getDay()] += 1
+
+    const time = date.getTime()
+    if (time >= recentStart) {
+      current.recentCount += 1
+    } else if (time >= previousStart) {
+      current.previousCount += 1
+    }
+
+    const hour = date.getHours()
+    if (hour >= 23 || hour <= 5) {
+      current.lateNightInteractions += 1
+    }
+    if (!current.firstSeen || date < new Date(current.firstSeen)) {
+      current.firstSeen = event.timestamp
+    }
+    if (!current.lastSeen || date > new Date(current.lastSeen)) {
+      current.lastSeen = event.timestamp
+    }
+
+    index.set(event.contact, current)
+  })
+
+  return [...index.values()]
+    .map((contact): ContactSummary => {
+      const hits = hitsByContact.get(contact.name) ?? []
+      const romanticHits = hits.filter((hit) => ['affection', 'planning', 'romantic'].includes(hit.category)).length
+      const secrecyHits = hits.filter((hit) => hit.category === 'secrecy').length
+      const intensityBase =
+        contact.messageCount / 4 +
+        contact.activeDays.size / 3 +
+        Math.max(contact.recentCount - contact.previousCount, 0) / 3 +
+        contact.lateNightInteractions / 4
+
+      return {
+        name: contact.name,
+        interactions: contact.interactions,
+        messageCount: contact.messageCount,
+        searchCount: contact.searchCount,
+        friendEventCount: contact.friendEventCount,
+        lateNightInteractions: contact.lateNightInteractions,
+        keywordHits: hits.length,
+        uploads: contact.uploads.size,
+        activeDays: contact.activeDays.size,
+        firstSeen: contact.firstSeen,
+        lastSeen: contact.lastSeen,
+        recentChange: contact.recentCount - contact.previousCount,
+        deletionIndicators: contact.deletionIndicators,
+        romanticScore: clampScore(1 + romanticHits * 1.8 + contact.lateNightInteractions * 0.3),
+        secrecyScore: clampScore(1 + secrecyHits * 2.6 + contact.deletionIndicators * 1.8 + Math.max(contact.recentCount - contact.previousCount, 0) * 0.35),
+        intensityScore: clampScore(1 + intensityBase),
+        missingChat:
+          contact.messageCount === 0 && (contact.searchCount > 0 || contact.friendEventCount > 0),
+        peakHour: topHourFromCounts(contact.hourCounts),
+        peakWeekday: topWeekdayFromCounts(contact.weekdayCounts),
+        categoryCounts: contact.categoryCounts,
+        topPhrases: [...contact.phraseCounts.entries()]
+          .filter(([, count]) => count > 1)
+          .sort((left, right) => right[1] - left[1])
+          .slice(0, 3)
+          .map(([phrase]) => phrase),
+        topToneLabels: TONE_RULES.filter((rule) =>
+          hits.some((hit) => hit.category === rule.category),
+        ).map((rule) => rule.label),
+        evidenceIds: contact.evidenceIds,
+      }
+    })
+    .sort((left, right) => {
+      if (right.interactions !== left.interactions) {
+        return right.interactions - left.interactions
+      }
+      return right.messageCount - left.messageCount
+    })
+}
+
+function buildEntities(events: NormalizedEvent[]) {
+  const entityIndex = new Map<string, EntitySummary>()
+
+  events.forEach((event) => {
+    const eventText = compact(
+      [event.contact, event.text, event.detail, event.locationName, event.region]
+        .filter(Boolean)
+        .join(' '),
+    )
+
+    if (event.contact && event.category !== 'account') {
+      pushEntity(entityIndex, 'person', event.contact, event)
+      if (looksLikeUsername(event.contact)) {
+        pushEntity(entityIndex, 'username', event.contact, event)
+      }
+    }
+    if (event.locationName) {
+      pushEntity(entityIndex, 'location', event.locationName, event)
+    }
+
+    extractNameMatches(event.text ?? '').forEach((value) => pushEntity(entityIndex, 'name', value, event))
+
+    const matches = extractMatches(eventText)
+    matches.emails.forEach((value) => pushEntity(entityIndex, 'email', value, event))
+    matches.phones.forEach((value) => pushEntity(entityIndex, 'phone', value, event))
+    matches.links.forEach((value) => pushEntity(entityIndex, 'link', value, event))
+    matches.handles.forEach((value) => pushEntity(entityIndex, 'handle', value, event))
+  })
+
+  return [...entityIndex.values()]
+    .filter((entity) => entity.count > 0)
+    .sort((left, right) => right.count - left.count)
 }
 
 function buildTimeline(events: NormalizedEvent[]) {
@@ -395,51 +642,13 @@ function buildTimeline(events: NormalizedEvent[]) {
   return [...timeline.values()].sort((left, right) => left.key.localeCompare(right.key))
 }
 
-function buildHourBuckets(events: NormalizedEvent[]) {
-  return Array.from({ length: 24 }, (_, hour): HourBucket => ({
-    hour,
-    count: events.filter((event) => {
-      const date = safeDate(event.timestamp)
-      return date ? date.getHours() === hour : false
-    }).length,
-  }))
-}
-
-function buildWeekdayBuckets(events: NormalizedEvent[]) {
-  return WEEKDAY_LABELS.map((label, day): WeekdayBucket => ({
-    day,
-    label,
-    count: events.filter((event) => {
-      const date = safeDate(event.timestamp)
-      return date ? date.getDay() === day : false
-    }).length,
-  }))
-}
-
-function buildHeatmap(events: NormalizedEvent[]) {
-  const cells: HeatmapCell[] = []
-
-  for (let day = 0; day < 7; day += 1) {
-    for (let hour = 0; hour < 24; hour += 1) {
-      cells.push({
-        day,
-        hour,
-        count: events.filter((event) => {
-          const date = safeDate(event.timestamp)
-          return date ? date.getDay() === day && date.getHours() === hour : false
-        }).length,
-      })
-    }
-  }
-
-  return cells
-}
-
 function buildEvidenceSnippets(events: NormalizedEvent[], evidenceIds: string[]) {
+  const eventIndex = new Map(events.map((event) => [event.id, event]))
+
   return evidenceIds
-    .map((eventId) => events.find((event) => event.id === eventId))
+    .map((eventId) => eventIndex.get(eventId))
     .filter((event): event is NormalizedEvent => Boolean(event))
-    .slice(0, 14)
+    .slice(0, 18)
     .map((event): EvidenceSnippet => ({
       eventId: event.id,
       uploadId: event.uploadId,
@@ -459,7 +668,7 @@ function buildSignals(
 ) {
   const findings: SignalFinding[] = []
 
-  contacts.slice(0, 10).forEach((contact) => {
+  contacts.slice(0, 12).forEach((contact) => {
     if (contact.recentChange >= 4) {
       findings.push({
         id: `contact-change-${contact.name}`,
@@ -467,10 +676,10 @@ function buildSignals(
         type: 'intensity-shift',
         severity: 'high',
         score: 84,
-        summary: 'Communication volume increased noticeably in the latest window.',
+        summary: 'Communication volume increased noticeably in the most recent comparison window.',
         explanation:
           'Recent interaction count is materially above the prior equal-length window, which makes this contact worth reviewing in context.',
-        evidenceIds: contact.evidenceIds.slice(0, 4),
+        evidenceIds: contact.evidenceIds.slice(0, 5),
       })
     }
 
@@ -480,11 +689,39 @@ function buildSignals(
         title: `${contact.name}: late-night concentration`,
         type: 'time-pattern',
         severity: 'medium',
-        score: 67,
-        summary: 'A meaningful share of this contact activity happened overnight.',
+        score: 68,
+        summary: 'A meaningful share of activity with this contact happened overnight.',
         explanation:
-          'The concentration of events between 11 PM and 5 AM is higher than typical and may be relevant to a timeline review.',
-        evidenceIds: contact.evidenceIds.slice(0, 4),
+          'The concentration of events between 11 PM and 5 AM is higher than typical and may matter in a timeline review.',
+        evidenceIds: contact.evidenceIds.slice(0, 5),
+      })
+    }
+
+    if (contact.romanticScore >= 8 && contact.messageCount >= 3) {
+      findings.push({
+        id: `contact-romantic-${contact.name}`,
+        title: `${contact.name}: elevated relational tone`,
+        type: 'tone-pattern',
+        severity: 'medium',
+        score: 73,
+        summary: 'This thread contains multiple relational or romantic-tone indicators.',
+        explanation:
+          'The score is based on deterministic phrase matches, activity density, and time-of-day concentration. It is not a claim about intent.',
+        evidenceIds: contact.evidenceIds.slice(0, 5),
+      })
+    }
+
+    if (contact.secrecyScore >= 7) {
+      findings.push({
+        id: `contact-secrecy-${contact.name}`,
+        title: `${contact.name}: secrecy or cleanup indicators`,
+        type: 'secrecy-pattern',
+        severity: 'medium',
+        score: 78,
+        summary: 'This contact has repeated secrecy-oriented language or deletion/removal signals.',
+        explanation:
+          'The score comes from deterministic phrase rules and deletion/removal keyword matches in linked rows.',
+        evidenceIds: contact.evidenceIds.slice(0, 5),
       })
     }
   })
@@ -508,6 +745,36 @@ function buildSignals(
     })
   }
 
+  const deletionEvents = events.filter(matchesDeletionIndicator)
+  if (deletionEvents.length > 0) {
+    findings.push({
+      id: 'deletion-indicators',
+      title: 'Deletion or removal indicators present',
+      type: 'deletion-indicator',
+      severity: deletionEvents.length >= 4 ? 'high' : 'medium',
+      score: deletionEvents.length >= 4 ? 82 : 64,
+      summary: 'Some rows contain delete/remove/blocked-style language or action terms.',
+      explanation:
+        'These may be message content, action metadata, or row labels. Review the cited rows directly before drawing conclusions.',
+      evidenceIds: deletionEvents.map((event) => event.id).slice(0, 8),
+    })
+  }
+
+  const missingChatContacts = contacts.filter((contact) => contact.missingChat)
+  if (missingChatContacts.length > 0) {
+    findings.push({
+      id: 'missing-thread-coverage',
+      title: 'Contacts with references but no parsed chat thread',
+      type: 'coverage-gap',
+      severity: 'low',
+      score: 58,
+      summary: 'Some contacts appear in search/friend data but have no parsed chat rows.',
+      explanation:
+        'This can indicate sparse exports, unsupported file shapes, or contacts that only appear outside saved chat history.',
+      evidenceIds: missingChatContacts.flatMap((contact) => contact.evidenceIds).slice(0, 8),
+    })
+  }
+
   const repeatedCrossUploadEntities = entities.filter((entity) => entity.uploads.length > 1)
   if (repeatedCrossUploadEntities.length > 0) {
     findings.push({
@@ -516,10 +783,10 @@ function buildSignals(
       type: 'cross-upload-link',
       severity: 'low',
       score: 54,
-      summary: 'Some entities appear across more than one uploaded export.',
+      summary: 'Some names, handles, or locations appear across more than one uploaded export.',
       explanation:
-        'This can be useful when comparing uploads over time or checking whether the same names, handles, or locations recur.',
-      evidenceIds: repeatedCrossUploadEntities.flatMap((entity) => entity.evidenceIds).slice(0, 5),
+        'This can be useful when comparing uploads over time or checking whether the same references recur.',
+      evidenceIds: repeatedCrossUploadEntities.flatMap((entity) => entity.evidenceIds).slice(0, 6),
     })
   }
 
@@ -534,7 +801,7 @@ function buildSignals(
       summary: 'Several message snippets matched secrecy-oriented phrase rules.',
       explanation:
         'These are deterministic phrase matches, not an accusation. Review the cited excerpts directly for context.',
-      evidenceIds: secrecyHits.map((hit) => hit.eventId).slice(0, 5),
+      evidenceIds: secrecyHits.map((hit) => hit.eventId).slice(0, 6),
     })
   }
 
@@ -556,22 +823,60 @@ function buildSignals(
 }
 
 function buildNotablePeriods(timeline: TimelineBucket[], signals: SignalFinding[]) {
-  return timeline
-    .filter((bucket) => bucket.count >= 4)
+  const average = timeline.length
+    ? timeline.reduce((sum, bucket) => sum + bucket.count, 0) / timeline.length
+    : 0
+
+  const notable = timeline
+    .filter((bucket) => bucket.count >= Math.max(4, average * 1.35))
     .sort((left, right) => right.count - left.count)
-    .slice(0, 3)
-    .map(
-      (bucket, index): NotablePeriod => ({
-        id: `period-${bucket.key}`,
-        label: `Notable period ${index + 1}`,
-        start: bucket.key,
-        end: bucket.key,
-        summary:
-          signals[0]?.summary ??
-          'High event density and mixed activity categories made this period stand out.',
-        evidenceIds: bucket.evidenceIds.slice(0, 5),
-      }),
-    )
+    .slice(0, 4)
+
+  return notable.map(
+    (bucket, index): NotablePeriod => ({
+      id: `period-${bucket.key}`,
+      label: `Notable period ${index + 1}`,
+      start: bucket.key,
+      end: bucket.key,
+      summary:
+        signals[0]?.summary ??
+        'High event density and mixed activity categories made this period stand out.',
+      evidenceIds: bucket.evidenceIds.slice(0, 6),
+    }),
+  )
+}
+
+function buildStats(
+  events: NormalizedEvent[],
+  contacts: ContactSummary[],
+  entities: EntitySummary[],
+  uploads: ParsedUpload[],
+  fileSummaries: WorkspaceDataset['fileSummaries'],
+): DatasetStats {
+  const dated = events
+    .map((event) => event.timestamp)
+    .filter((value): value is string => Boolean(value))
+    .sort((left, right) => left.localeCompare(right))
+
+  return {
+    totalEvents: events.length,
+    chatEvents: events.filter((event) => event.category === 'chat').length,
+    locationEvents: events.filter((event) => event.category === 'location').length,
+    loginEvents: events.filter((event) => event.category === 'login').length,
+    searchEvents: events.filter((event) => event.category === 'search').length,
+    memoryEvents: events.filter((event) => event.category === 'memory').length,
+    uniqueContacts: contacts.length,
+    uniqueEntities: entities.length,
+    uploads: uploads.length,
+    supportedFiles: fileSummaries.filter((file) => file.supported).length,
+    unsupportedFiles: fileSummaries.filter((file) => !file.supported).length,
+    missingChatContacts: contacts.filter((contact) => contact.missingChat).length,
+    deletionIndicators: events.filter(matchesDeletionIndicator).length,
+    dateRange: {
+      start: dated[0] ?? null,
+      end: dated[dated.length - 1] ?? null,
+    },
+  }
 }
 
 function buildFactsSummary(
@@ -590,8 +895,14 @@ function buildFactsSummary(
       ? `Observed activity spans from ${formatDayLabel(stats.dateRange.start)} to ${formatDayLabel(stats.dateRange.end)}.`
       : 'No valid date range was recovered from the current data.',
     topContact
-      ? `${topContact.name} is currently the most active contact with ${topContact.interactions} linked events.`
+      ? `${topContact.name} is currently the most active contact with ${topContact.interactions} linked events and ${topContact.messageCount} chat rows.`
       : 'No recurring contacts were identified in the current data.',
+    stats.missingChatContacts > 0
+      ? `${stats.missingChatContacts} contact${stats.missingChatContacts === 1 ? '' : 's'} appear in friend/search metadata without a parsed chat thread.`
+      : 'Every identified contact has at least one parsed thread or linked chat row.',
+    stats.deletionIndicators > 0
+      ? `${stats.deletionIndicators} event${stats.deletionIndicators === 1 ? '' : 's'} contain deletion, removal, or cleanup-style indicators.`
+      : 'No deletion or removal indicators were detected by the current rule set.',
     topEntity
       ? `Top extracted entity: ${topEntity.value} (${topEntity.type}) seen ${topEntity.count} times.`
       : 'No repeated structured entities were extracted.',
@@ -599,29 +910,6 @@ function buildFactsSummary(
       ? `Highest-priority signal: ${signals[0].title}.`
       : 'No notable deterministic signals were produced.',
   ]
-}
-
-function buildStats(events: NormalizedEvent[], contacts: ContactSummary[], entities: EntitySummary[], uploads: ParsedUpload[]): DatasetStats {
-  const dated = events
-    .map((event) => event.timestamp)
-    .filter((value): value is string => Boolean(value))
-    .sort((left, right) => left.localeCompare(right))
-
-  return {
-    totalEvents: events.length,
-    chatEvents: events.filter((event) => event.category === 'chat').length,
-    locationEvents: events.filter((event) => event.category === 'location').length,
-    loginEvents: events.filter((event) => event.category === 'login').length,
-    searchEvents: events.filter((event) => event.category === 'search').length,
-    memoryEvents: events.filter((event) => event.category === 'memory').length,
-    uniqueContacts: contacts.length,
-    uniqueEntities: entities.length,
-    uploads: uploads.length,
-    dateRange: {
-      start: dated[0] ?? null,
-      end: dated[dated.length - 1] ?? null,
-    },
-  }
 }
 
 function dedupeWarnings(uploads: ParsedUpload[]) {
@@ -633,6 +921,9 @@ export function buildWorkspace(uploads: ParsedUpload[]): WorkspaceDataset {
   const events = uploads
     .flatMap((upload) => upload.events)
     .sort((left, right) => {
+      if (!left.timestamp && !right.timestamp) {
+        return left.id.localeCompare(right.id)
+      }
       if (!left.timestamp) {
         return 1
       }
@@ -648,9 +939,10 @@ export function buildWorkspace(uploads: ParsedUpload[]): WorkspaceDataset {
   const repeatedPhrases = buildRepeatedPhrases(events)
   const toneSummaries = buildToneSummaries(keywordHits)
   const timeline = buildTimeline(events)
-  const hourBuckets = buildHourBuckets(events)
-  const weekdayBuckets = buildWeekdayBuckets(events)
-  const heatmap = buildHeatmap(events)
+  const activitySource = events.filter((event) => event.category === 'chat')
+  const { hourBuckets, weekdayBuckets, heatmap } = buildActivityBuckets(
+    activitySource.length ? activitySource : events,
+  )
   const signals = buildSignals(events, contacts, entities, keywordHits, timeline)
   const notablePeriods = buildNotablePeriods(timeline, signals)
   const evidenceIds = [
@@ -658,7 +950,7 @@ export function buildWorkspace(uploads: ParsedUpload[]): WorkspaceDataset {
     ...notablePeriods.flatMap((period) => period.evidenceIds),
   ]
   const evidenceSnippets = buildEvidenceSnippets(events, [...new Set(evidenceIds)])
-  const stats = buildStats(events, contacts, entities, uploads)
+  const stats = buildStats(events, contacts, entities, uploads, fileSummaries)
   const factsSummary = buildFactsSummary(stats, uploads, contacts, entities, signals)
 
   return {
@@ -689,8 +981,9 @@ export function buildWorkspaceReport(workspace: WorkspaceDataset) {
     generatedAt: new Date().toISOString(),
     uploads: workspace.uploads,
     stats: workspace.stats,
-    topContacts: workspace.contacts.slice(0, 10),
-    topEntities: workspace.entities.slice(0, 12),
+    topContacts: workspace.contacts.slice(0, 12),
+    topEntities: workspace.entities.slice(0, 16),
+    repeatedPhrases: workspace.repeatedPhrases,
     notablePeriods: workspace.notablePeriods,
     signals: workspace.signals,
     factsSummary: workspace.factsSummary,

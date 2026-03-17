@@ -1,11 +1,14 @@
 export type DataCategory =
   | 'account'
+  | 'bitmoji'
   | 'chat'
   | 'friend'
   | 'location'
   | 'login'
   | 'memory'
+  | 'purchase'
   | 'search'
+  | 'support'
   | 'unknown'
 
 export type NormalizedValue = string | number | boolean | null
@@ -81,6 +84,7 @@ export type ContactSummary = {
   interactions: number
   messageCount: number
   searchCount: number
+  friendEventCount: number
   lateNightInteractions: number
   keywordHits: number
   uploads: number
@@ -88,6 +92,15 @@ export type ContactSummary = {
   firstSeen: string | null
   lastSeen: string | null
   recentChange: number
+  deletionIndicators: number
+  romanticScore: number
+  secrecyScore: number
+  intensityScore: number
+  missingChat: boolean
+  peakHour: number | null
+  peakWeekday: string | null
+  categoryCounts: Partial<Record<DataCategory, number>>
+  topPhrases: string[]
   topToneLabels: string[]
   evidenceIds: string[]
 }
@@ -105,7 +118,7 @@ export type SignalFinding = {
 
 export type EntitySummary = {
   id: string
-  type: 'person' | 'handle' | 'email' | 'phone' | 'link' | 'location' | 'username'
+  type: 'person' | 'name' | 'handle' | 'email' | 'phone' | 'link' | 'location' | 'username'
   value: string
   count: number
   contacts: string[]
@@ -181,6 +194,10 @@ export type DatasetStats = {
   uniqueContacts: number
   uniqueEntities: number
   uploads: number
+  supportedFiles: number
+  unsupportedFiles: number
+  missingChatContacts: number
+  deletionIndicators: number
   dateRange: {
     start: string | null
     end: string | null

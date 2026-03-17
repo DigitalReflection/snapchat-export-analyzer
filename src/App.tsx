@@ -1,6 +1,22 @@
-import { startTransition, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
+import {
+  startTransition,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type ReactNode,
+} from 'react'
 import './App.css'
-import type { AIProvider, AIResult, AISettings, ContactSummary, NormalizedEvent } from './types'
+import type {
+  AIProvider,
+  AIResult,
+  AISettings,
+  ContactSummary,
+  FileSummary,
+  NormalizedEvent,
+} from './types'
 import { runAIReview } from './lib/ai'
 import {
   downloadContactsCsv,
@@ -13,20 +29,34 @@ import { parseSnapchatFileList, parseSnapchatZip } from './lib/snapchatParser'
 import { sampleUpload } from './sampleData'
 
 type ContactLabel = 'male' | 'female' | 'unknown'
+type ActiveTab = 'overview' | 'chats' | 'search' | 'signals' | 'ai' | 'data'
+type ContactSort = 'activity' | 'messages' | 'romance' | 'secrecy' | 'recent' | 'missing'
+type ThreadMode = 'chat' | 'all'
+type MetricKey = 'contacts' | 'threads' | 'missing' | 'deletions' | 'timing' | 'files'
+
+type ModalState =
+  | { type: 'contact'; contactName: string }
+  | { type: 'event'; eventId: string }
+  | { type: 'signal'; signalId: string }
+  | { type: 'upload'; uploadId: string }
+  | { type: 'file'; uploadId: string; path: string }
+  | { type: 'timeline'; dayKey: string }
+  | { type: 'metric'; key: MetricKey }
+  | null
 
 const NOTES_KEY = 'export-viewer-pro-private-notes'
 const AI_SETTINGS_KEY = 'export-viewer-pro-ai-settings'
 const CONTACT_LABELS_KEY = 'export-viewer-pro-contact-labels'
 const DEFAULT_MODELS: Record<AIProvider, string> = {
   gemini: 'gemini-2.5-pro',
-  openai: 'gpt-5.1',
+  openai: 'gpt-5.2',
 }
 const MODEL_PRESETS: Record<AIProvider, string[]> = {
-  gemini: ['gemini-2.5-pro', 'gemini-2.5-flash'],
-  openai: ['gpt-5.1', 'gpt-5-mini'],
+  gemini: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-flash-latest'],
+  openai: ['gpt-5.2', 'gpt-5-mini', 'gpt-5.1'],
 }
 const SUPPORTED_EXPORT_AREAS = [
-  'Profiles',
+  'Account',
   'Saved chats',
   'Snap history',
   'Friends',
@@ -34,13 +64,46 @@ const SUPPORTED_EXPORT_AREAS = [
   'Location',
   'Login/device',
   'Memories',
-  'HTML/CSV/TXT',
+  'Bitmoji',
+  'Support',
+  'Purchase',
+]
+const DELETION_TERMS = [
+  'delete',
+  'deleted',
+  'remove',
+  'removed',
+  'unsave',
+  'unsaved',
+  'clear chat',
+  'cleared',
+  'blocked',
+  'unfriend',
+  'unfriended',
+  'unadd',
+  'unadded',
+]
+const TAB_LABELS: Array<{ id: ActiveTab; label: string }> = [
+  { id: 'overview', label: 'Overview' },
+  { id: 'chats', label: 'Chats' },
+  { id: 'search', label: 'Search' },
+  { id: 'signals', label: 'Signals' },
+  { id: 'ai', label: 'AI' },
+  { id: 'data', label: 'Data' },
 ]
 
 function formatDate(value: string | null) {
   if (!value) return 'Unknown'
   const date = new Date(value)
   return Number.isNaN(date.getTime()) ? 'Unknown' : date.toLocaleString()
+}
+
+function formatDay(value: string | null) {
+  if (!value) return 'Unknown'
+  const date = new Date(value)
+  return Number.isNaN(date.getTime())
+    ? 'Unknown'
+    : date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
 
 function formatBytes(bytes: number) {
@@ -59,56 +122,152 @@ function compact(value: string | null | undefined) {
   return (value ?? '').replace(/\s+/g, ' ').trim()
 }
 
-function peakHour(events: NormalizedEvent[]) {
-  const buckets = Array.from({ length: 24 }, (_, hour) => ({
-    hour,
-    count: events.filter((event) => event.timestamp && new Date(event.timestamp).getHours() === hour)
-      .length,
-  })).sort((left, right) => right.count - left.count)
-  return buckets[0]?.count ? `${buckets[0].hour}:00` : 'Unknown'
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
-function peakWeekday(events: NormalizedEvent[]) {
-  const labels = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
-  const buckets = labels.map((label, day) => ({
-    label,
-    count: events.filter((event) => event.timestamp && new Date(event.timestamp).getDay() === day)
-      .length,
-  })).sort((left, right) => right.count - left.count)
-  return buckets[0]?.count ? buckets[0].label : 'Unknown'
-}
-
-function keywordsFromInput(value: string) {
+function queryTermsFromInput(value: string) {
   return value
     .split(/[\n,]/)
     .map((entry) => entry.trim().toLowerCase())
     .filter(Boolean)
 }
 
-function SectionHeader(props: { eyebrow: string; title: string; subtitle?: string }) {
+function peakHourLabel(events: Array<{ hour: number; count: number }>) {
+  const top = [...events].sort((left, right) => right.count - left.count)[0]
+  return top?.count ? `${top.hour.toString().padStart(2, '0')}:00` : 'Unknown'
+}
+
+function peakWeekdayLabel(events: Array<{ label: string; count: number }>) {
+  const top = [...events].sort((left, right) => right.count - left.count)[0]
+  return top?.count ? top.label : 'Unknown'
+}
+
+function hasDeletionIndicator(event: NormalizedEvent) {
+  const haystack = compact(
+    [event.text, event.detail, event.subtype, event.evidenceText, event.sourceFile]
+      .filter(Boolean)
+      .join(' '),
+  ).toLowerCase()
+
+  return DELETION_TERMS.some((term) => haystack.includes(term))
+}
+
+function scoreLabel(score: number) {
+  if (score >= 8) return 'high'
+  if (score >= 5) return 'medium'
+  return 'low'
+}
+
+function sortContacts(contacts: ContactSummary[], mode: ContactSort) {
+  const sorted = [...contacts]
+
+  sorted.sort((left, right) => {
+    if (mode === 'messages') {
+      return right.messageCount - left.messageCount || right.interactions - left.interactions
+    }
+    if (mode === 'romance') {
+      return right.romanticScore - left.romanticScore || right.messageCount - left.messageCount
+    }
+    if (mode === 'secrecy') {
+      return right.secrecyScore - left.secrecyScore || right.interactions - left.interactions
+    }
+    if (mode === 'recent') {
+      return right.recentChange - left.recentChange || right.interactions - left.interactions
+    }
+    if (mode === 'missing') {
+      return Number(right.missingChat) - Number(left.missingChat) || right.interactions - left.interactions
+    }
+
+    return right.interactions - left.interactions || right.messageCount - left.messageCount
+  })
+
+  return sorted
+}
+
+function HighlightedText(props: { text: string; terms: string[] }) {
+  if (!props.terms.length) {
+    return <>{props.text}</>
+  }
+
+  const pattern = new RegExp(`(${props.terms.map((term) => escapeRegExp(term)).join('|')})`, 'gi')
+  const parts = props.text.split(pattern)
+
+  return (
+    <>
+      {parts.map((part, index) =>
+        props.terms.some((term) => part.toLowerCase() === term.toLowerCase()) ? (
+          <mark key={`${part}-${index}`}>{part}</mark>
+        ) : (
+          <span key={`${part}-${index}`}>{part}</span>
+        ),
+      )}
+    </>
+  )
+}
+
+function SectionHeader(props: { eyebrow: string; title: string; subtitle?: string; actions?: ReactNode }) {
   return (
     <div className="section-heading">
-      <p className="eyebrow">{props.eyebrow}</p>
-      <h2>{props.title}</h2>
-      {props.subtitle ? <p className="section-copy">{props.subtitle}</p> : null}
+      <div>
+        <p className="eyebrow">{props.eyebrow}</p>
+        <h2>{props.title}</h2>
+        {props.subtitle ? <p className="section-copy">{props.subtitle}</p> : null}
+      </div>
+      {props.actions ? <div className="section-actions">{props.actions}</div> : null}
     </div>
   )
 }
 
-function ContactItem(props: {
-  contact: ContactSummary
-  active: boolean
-  label: ContactLabel
+function MetricButton(props: {
+  label: string
+  value: string | number
+  caption: string
   onClick: () => void
 }) {
   return (
-    <button className={props.active ? 'contact-item active' : 'contact-item'} onClick={props.onClick} type="button">
-      <div>
-        <strong>{props.contact.name}</strong>
-        <span>{props.contact.interactions} events</span>
-      </div>
-      <span className={`contact-label label-${props.label}`}>{props.label}</span>
+    <button className="metric-card" onClick={props.onClick} type="button">
+      <span>{props.label}</span>
+      <strong>{props.value}</strong>
+      <p>{props.caption}</p>
     </button>
+  )
+}
+
+function ScorePill(props: { label: string; value: number }) {
+  return (
+    <span className={`score-pill score-${scoreLabel(props.value)}`}>
+      {props.label} {props.value}/10
+    </span>
+  )
+}
+
+function DetailModal(props: {
+  title: string
+  subtitle?: string
+  onClose: () => void
+  children: ReactNode
+}) {
+  return (
+    <div className="modal-backdrop" onClick={props.onClose} role="presentation">
+      <section
+        aria-modal="true"
+        className="modal-shell"
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+      >
+        <header className="modal-header">
+          <div>
+            <h3>{props.title}</h3>
+            {props.subtitle ? <p className="section-copy">{props.subtitle}</p> : null}
+          </div>
+          <button className="ghost-button close-button" onClick={props.onClose} type="button">
+            Close
+          </button>
+        </header>
+        <div className="modal-body">{props.children}</div>
+      </section>
+    </div>
   )
 }
 
@@ -118,18 +277,33 @@ export default function App() {
   const [error, setError] = useState<string | null>(null)
   const [isLoadingZip, setIsLoadingZip] = useState(false)
   const [isLoadingFolder, setIsLoadingFolder] = useState(false)
+  const [activeTab, setActiveTab] = useState<ActiveTab>('overview')
   const [notes, setNotes] = useState('')
   const [contactSearch, setContactSearch] = useState('')
+  const [contactSort, setContactSort] = useState<ContactSort>('activity')
   const [selectedContact, setSelectedContact] = useState('')
   const [contactLabels, setContactLabels] = useState<Record<string, ContactLabel>>({})
   const [contactGroupFilter, setContactGroupFilter] = useState<'all' | ContactLabel>('all')
-  const [keywordQuery, setKeywordQuery] = useState('delete this, keep this between us')
-  const [aiSettings, setAiSettings] = useState<AISettings>({ provider: 'gemini', apiKey: '', model: DEFAULT_MODELS.gemini })
-  const [aiQuestion, setAiQuestion] = useState('Review the full chat history and summarize the strongest factual patterns with evidence IDs.')
+  const [searchQuery, setSearchQuery] = useState('delete this, Jordan, address')
+  const [threadMode, setThreadMode] = useState<ThreadMode>('chat')
+  const [threadSearch, setThreadSearch] = useState('')
+  const [modalState, setModalState] = useState<ModalState>(null)
+  const [aiSettings, setAiSettings] = useState<AISettings>({
+    provider: 'gemini',
+    apiKey: '',
+    model: DEFAULT_MODELS.gemini,
+  })
+  const [aiQuestion, setAiQuestion] = useState(
+    'Review the full chat history and summarize the strongest factual patterns, tone shifts, deletion indicators, and missing-thread gaps with evidence IDs.',
+  )
   const [aiResult, setAiResult] = useState<AIResult | null>(null)
   const [aiError, setAiError] = useState<string | null>(null)
   const [isAiLoading, setIsAiLoading] = useState(false)
   const folderInputRef = useRef<HTMLInputElement>(null)
+
+  const deferredContactSearch = useDeferredValue(contactSearch)
+  const deferredSearchQuery = useDeferredValue(searchQuery)
+  const deferredThreadSearch = useDeferredValue(threadSearch)
 
   useEffect(() => {
     folderInputRef.current?.setAttribute('webkitdirectory', '')
@@ -154,47 +328,148 @@ export default function App() {
   }, [])
 
   useEffect(() => window.localStorage.setItem(NOTES_KEY, notes), [notes])
-  useEffect(() => window.localStorage.setItem(CONTACT_LABELS_KEY, JSON.stringify(contactLabels)), [contactLabels])
-  useEffect(() => window.sessionStorage.setItem(AI_SETTINGS_KEY, JSON.stringify(aiSettings)), [aiSettings])
+  useEffect(
+    () => window.localStorage.setItem(CONTACT_LABELS_KEY, JSON.stringify(contactLabels)),
+    [contactLabels],
+  )
+  useEffect(
+    () => window.sessionStorage.setItem(AI_SETTINGS_KEY, JSON.stringify(aiSettings)),
+    [aiSettings],
+  )
+  useEffect(() => {
+    if (!modalState) return
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setModalState(null)
+      }
+    }
+
+    window.addEventListener('keydown', handleEscape)
+    return () => window.removeEventListener('keydown', handleEscape)
+  }, [modalState])
 
   const workspace = useMemo(() => buildWorkspace(uploads), [uploads])
+  const eventsById = useMemo(
+    () => new Map(workspace.events.map((event) => [event.id, event])),
+    [workspace.events],
+  )
+  const contactIndex = useMemo(
+    () => new Map(workspace.contacts.map((contact) => [contact.name, contact])),
+    [workspace.contacts],
+  )
+  const uploadIndex = useMemo(
+    () => new Map(workspace.uploads.map((upload) => [upload.id, upload])),
+    [workspace.uploads],
+  )
+  const signalIndex = useMemo(
+    () => new Map(workspace.signals.map((signal) => [signal.id, signal])),
+    [workspace.signals],
+  )
+  const eventsByContact = useMemo(() => {
+    const map = new Map<string, NormalizedEvent[]>()
+    workspace.events.forEach((event) => {
+      if (!event.contact) return
+      const current = map.get(event.contact) ?? []
+      current.push(event)
+      map.set(event.contact, current)
+    })
+    return map
+  }, [workspace.events])
+  const fileSummariesByUpload = useMemo(() => {
+    const map = new Map<string, FileSummary[]>()
+    workspace.fileSummaries.forEach((file) => {
+      const current = map.get(file.uploadId) ?? []
+      current.push(file)
+      map.set(file.uploadId, current)
+    })
+    return map
+  }, [workspace.fileSummaries])
+
   useEffect(() => {
-    if (workspace.contacts.length && !workspace.contacts.some((contact) => contact.name === selectedContact)) {
+    if (!workspace.contacts.length) {
+      setSelectedContact('')
+      return
+    }
+
+    if (!workspace.contacts.some((contact) => contact.name === selectedContact)) {
       setSelectedContact(workspace.contacts[0].name)
     }
   }, [selectedContact, workspace.contacts])
 
-  const chatEvents = useMemo(() => workspace.events.filter((event) => event.category === 'chat'), [workspace.events])
   const filteredContacts = useMemo(() => {
-    const needle = contactSearch.trim().toLowerCase()
-    return workspace.contacts.filter((contact) => {
-      const label = contactLabels[contact.name] ?? 'unknown'
-      if (contactGroupFilter !== 'all' && label !== contactGroupFilter) return false
-      return !needle || contact.name.toLowerCase().includes(needle)
-    })
-  }, [contactGroupFilter, contactLabels, contactSearch, workspace.contacts])
+    const needle = deferredContactSearch.trim().toLowerCase()
+    return sortContacts(
+      workspace.contacts.filter((contact) => {
+        const label = contactLabels[contact.name] ?? 'unknown'
+        if (contactGroupFilter !== 'all' && label !== contactGroupFilter) return false
+        return !needle || contact.name.toLowerCase().includes(needle)
+      }),
+      contactSort,
+    )
+  }, [contactGroupFilter, contactLabels, contactSort, deferredContactSearch, workspace.contacts])
+
+  const selectedSummary =
+    contactIndex.get(selectedContact) ?? filteredContacts[0] ?? workspace.contacts[0] ?? null
+
+  const selectedPreviewEvents = useMemo(() => {
+    if (!selectedSummary) return []
+    const thread = eventsByContact.get(selectedSummary.name) ?? []
+    return [...thread].filter((event) => event.category === 'chat').slice(-6).reverse()
+  }, [eventsByContact, selectedSummary])
+
+  const searchTerms = useMemo(() => queryTermsFromInput(deferredSearchQuery), [deferredSearchQuery])
+  const searchHits = useMemo(() => {
+    if (!searchTerms.length) return []
+
+    return workspace.events
+      .filter((event) => {
+        const haystack = compact(
+          [event.contact, event.text, event.detail, event.evidenceText, event.sourceFile]
+            .filter(Boolean)
+            .join(' '),
+        ).toLowerCase()
+
+        return searchTerms.some((term) => haystack.includes(term))
+      })
+      .sort((left, right) => {
+        if (left.category === 'chat' && right.category !== 'chat') return -1
+        if (left.category !== 'chat' && right.category === 'chat') return 1
+        if (left.timestamp && right.timestamp) return right.timestamp.localeCompare(left.timestamp)
+        return left.id.localeCompare(right.id)
+      })
+  }, [searchTerms, workspace.events])
+
+  const deletionEvents = useMemo(
+    () => workspace.events.filter((event) => hasDeletionIndicator(event)),
+    [workspace.events],
+  )
+  const missingChatContacts = useMemo(
+    () => workspace.contacts.filter((contact) => contact.missingChat),
+    [workspace.contacts],
+  )
+  const priorityContacts = useMemo(
+    () =>
+      [...workspace.contacts]
+        .sort(
+          (left, right) =>
+            right.secrecyScore + right.romanticScore + right.intensityScore -
+            (left.secrecyScore + left.romanticScore + left.intensityScore),
+        )
+        .slice(0, 5),
+    [workspace.contacts],
+  )
   const contactGroups = useMemo(
     () => ({
-      male: workspace.contacts.filter((contact) => (contactLabels[contact.name] ?? 'unknown') === 'male').length,
-      female: workspace.contacts.filter((contact) => (contactLabels[contact.name] ?? 'unknown') === 'female').length,
-      unknown: workspace.contacts.filter((contact) => (contactLabels[contact.name] ?? 'unknown') === 'unknown').length,
+      male: workspace.contacts.filter((contact) => (contactLabels[contact.name] ?? 'unknown') === 'male')
+        .length,
+      female: workspace.contacts.filter((contact) => (contactLabels[contact.name] ?? 'unknown') === 'female')
+        .length,
+      unknown: workspace.contacts.filter((contact) => (contactLabels[contact.name] ?? 'unknown') === 'unknown')
+        .length,
     }),
     [contactLabels, workspace.contacts],
   )
-  const selectedSummary = workspace.contacts.find((contact) => contact.name === selectedContact) ?? null
-  const selectedThread = workspace.events.filter((event) => event.contact === selectedContact)
-  const selectedToneHits = workspace.keywordHits.filter((hit) => hit.contact === selectedContact)
-  const selectedEntities = workspace.entities.filter((entity) => entity.contacts.includes(selectedContact)).slice(0, 8)
-  const keywordHits = useMemo(() => {
-    const keywords = keywordsFromInput(keywordQuery)
-    return workspace.events
-      .filter((event) => event.category === 'chat' && event.text)
-      .flatMap((event) =>
-        keywords
-          .filter((keyword) => event.text?.toLowerCase().includes(keyword))
-          .map((keyword) => ({ keyword, event })),
-      )
-  }, [keywordQuery, workspace.events])
 
   function mergeUploads(nextUploads: typeof uploads) {
     setUploads((current) => {
@@ -209,10 +484,16 @@ export default function App() {
     setIsLoadingZip(true)
     setError(null)
     setStatus(`Parsing ${files.length} zip upload${files.length === 1 ? '' : 's'}...`)
+
     try {
       const parsed = await Promise.all(files.map((file) => parseSnapchatZip(file)))
-      startTransition(() => mergeUploads(parsed))
-      setStatus(`Loaded ${parsed.reduce((sum, upload) => sum + upload.events.length, 0)} normalized events from zip upload(s).`)
+      startTransition(() => {
+        mergeUploads(parsed)
+        setActiveTab('overview')
+      })
+      setStatus(
+        `Loaded ${parsed.reduce((sum, upload) => sum + upload.events.length, 0)} normalized events from zip upload(s).`,
+      )
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Zip parsing failed.')
       setStatus('Zip parsing failed.')
@@ -228,9 +509,13 @@ export default function App() {
     setIsLoadingFolder(true)
     setError(null)
     setStatus('Parsing extracted export folder and skipping media...')
+
     try {
       const parsed = await parseSnapchatFileList(files)
-      startTransition(() => mergeUploads([parsed]))
+      startTransition(() => {
+        mergeUploads([parsed])
+        setActiveTab('overview')
+      })
       setStatus(`Loaded extracted folder ${parsed.upload.fileName} and skipped media files.`)
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Folder parsing failed.')
@@ -246,6 +531,7 @@ export default function App() {
     setAiError(null)
     try {
       setAiResult(await runAIReview(aiSettings, workspace, aiQuestion))
+      setActiveTab('ai')
     } catch (caught) {
       setAiError(caught instanceof Error ? caught.message : 'AI analysis failed.')
     } finally {
@@ -253,122 +539,1330 @@ export default function App() {
     }
   }
 
-  return (
-    <main className="app-shell">
-      <header className="masthead">
-        <div>
-          <p className="eyebrow">Kali-style communication intelligence</p>
-          <h1>Export Viewer Pro</h1>
-          <p className="section-copy">Chat-first dashboard for Snapchat exports with thread browsing, keyword search, time analysis, and optional AI review.</p>
-        </div>
-        <div className="masthead-actions">
-          <label className="primary-button file-picker"><input accept=".zip" multiple onChange={handleZipUpload} type="file" />{isLoadingZip ? 'Parsing zip...' : 'Upload zip'}</label>
-          <button className="secondary-button" onClick={() => folderInputRef.current?.click()} type="button">{isLoadingFolder ? 'Parsing folder...' : 'Load extracted folder'}</button>
-          <button className="ghost-button" onClick={() => setUploads([sampleUpload])} type="button">Reset demo</button>
-          <input ref={folderInputRef} multiple onChange={handleFolderUpload} style={{ display: 'none' }} type="file" />
-        </div>
-      </header>
+  function openMetricModal(key: MetricKey) {
+    setModalState({ type: 'metric', key })
+  }
 
-      <section className="overview-grid">
-        <article className="panel hero-panel">
-          <SectionHeader eyebrow="Overview" title="Visible controls, high-limit import path" subtitle="Use extracted-folder import for very large Snapchat exports. It skips photos and videos and only scans text-based export data." />
-          <div className="hero-pills">{SUPPORTED_EXPORT_AREAS.map((label) => <span className="outline-pill" key={label}>{label}</span>)}</div>
-          <div className="hero-status"><p>{status}</p>{error ? <p className="error-line">{error}</p> : null}</div>
-          <div className="button-row">
-            <button className="chip-button" onClick={() => downloadEventsJson(workspace.events)} type="button">Events JSON</button>
-            <button className="chip-button" onClick={() => downloadContactsCsv(workspace.contacts)} type="button">Contacts CSV</button>
-            <button className="chip-button" onClick={() => downloadKeywordHitsCsv(workspace.keywordHits)} type="button">Tone CSV</button>
-            <button className="chip-button" onClick={() => downloadWorkspaceReport(workspace)} type="button">Report JSON</button>
-          </div>
-        </article>
-        <article className="panel ai-setup-panel">
-          <SectionHeader eyebrow="AI setup" title="API key and provider are here" subtitle="Keys stay in session storage. AI review is optional and deterministic analytics still run without it." />
-          <div className="settings-grid">
-            <label><span>Provider</span><select value={aiSettings.provider} onChange={(event) => setAiSettings((current) => ({ ...current, provider: event.target.value as AIProvider, model: current.provider === event.target.value ? current.model : DEFAULT_MODELS[event.target.value as AIProvider] }))}><option value="gemini">Gemini</option><option value="openai">OpenAI</option></select></label>
-            <label><span>Model</span><input type="text" value={aiSettings.model} onChange={(event) => setAiSettings((current) => ({ ...current, model: event.target.value }))} /></label>
-            <label className="span-two"><span>API key</span><input type="password" placeholder="Paste API key" value={aiSettings.apiKey} onChange={(event) => setAiSettings((current) => ({ ...current, apiKey: event.target.value }))} /></label>
-            <label className="span-two"><span>AI request</span><textarea className="ai-prompt" value={aiQuestion} onChange={(event) => setAiQuestion(event.target.value)} /></label>
-          </div>
-          <div className="hero-pills">
-            {MODEL_PRESETS[aiSettings.provider].map((model) => (
+  function openContactModal(contactName: string) {
+    setSelectedContact(contactName)
+    setThreadSearch('')
+    setModalState({ type: 'contact', contactName })
+  }
+
+  function moveModalContact(direction: -1 | 1) {
+    if (!modalState || modalState.type !== 'contact') return
+    const names = (filteredContacts.length ? filteredContacts : workspace.contacts).map((contact) => contact.name)
+    const index = names.indexOf(modalState.contactName)
+    if (index < 0) return
+    const nextName = names[(index + direction + names.length) % names.length]
+    setSelectedContact(nextName)
+    setThreadSearch('')
+    setModalState({ type: 'contact', contactName: nextName })
+  }
+
+  function renderMetricModal(key: MetricKey) {
+    if (key === 'contacts') {
+      return (
+        <DetailModal
+          onClose={() => setModalState(null)}
+          subtitle="All detected contacts, sorted by activity."
+          title="Detected contacts"
+        >
+          <div className="modal-list">
+            {workspace.contacts.map((contact) => (
               <button
-                className={aiSettings.model === model ? 'chip-button active-chip' : 'chip-button'}
-                key={model}
-                onClick={() => setAiSettings((current) => ({ ...current, model }))}
+                className="list-button"
+                key={contact.name}
+                onClick={() => openContactModal(contact.name)}
                 type="button"
               >
-                {model}
+                <div className="list-head">
+                  <strong>{contact.name}</strong>
+                  <span>{contact.interactions} events</span>
+                </div>
+                <p>
+                  {contact.messageCount} chat rows, {contact.activeDays} active days, peak {contact.peakHour ?? '--'}:00
+                </p>
               </button>
             ))}
           </div>
-          <button className="primary-button full-width" onClick={handleAiRun} type="button">{isAiLoading ? 'Analyzing full chat history...' : 'Run AI over full chat history'}</button>
-          {aiError ? <p className="error-line">{aiError}</p> : null}
-        </article>
-      </section>
+        </DetailModal>
+      )
+    }
 
-      <section className="stats-grid">
-        <article className="stat-card"><span>Peak chat time</span><strong>{peakHour(chatEvents)}</strong><p>Chat events only.</p></article>
-        <article className="stat-card"><span>Peak chat day</span><strong>{peakWeekday(chatEvents)}</strong><p>Chat events only.</p></article>
-        <article className="stat-card"><span>Most active contact</span><strong>{workspace.contacts[0]?.name ?? 'Unknown'}</strong><p>{workspace.contacts[0]?.interactions ?? 0} events.</p></article>
-        <article className="stat-card"><span>Total events</span><strong>{workspace.stats.totalEvents}</strong><p>{workspace.stats.uniqueEntities} extracted entities.</p></article>
-        <article className="stat-card"><span>Supported files</span><strong>{workspace.fileSummaries.filter((file) => file.supported).length}</strong><p>{workspace.fileSummaries.filter((file) => !file.supported).length} skipped.</p></article>
-        <article className="stat-card"><span>Highest signal</span><strong>{workspace.signals[0]?.title ?? 'None'}</strong><p>{workspace.signals[0]?.summary ?? 'No deterministic alerts.'}</p></article>
-      </section>
-
-      <section className="dashboard-grid">
-        <article className="panel panel-span-two">
-          <SectionHeader eyebrow="Upload/account overview" title="Source provenance and account metadata" />
-          <div className="upload-grid">{workspace.uploads.map((upload) => <article className="upload-card" key={upload.id}><div className="upload-head"><div><strong>{upload.fileName}</strong><span>{formatBytes(upload.sizeBytes)}</span></div><span className="outline-pill">{upload.supportedFiles} supported files</span></div><div className="meta-grid"><span>Processed {formatDate(upload.processedAt)}</span><span>Account {upload.account.displayName ?? upload.account.username ?? 'Unknown'}</span><span>{upload.account.email ?? 'No email recovered'}</span><span>{upload.account.phone ?? 'No phone recovered'}</span></div></article>)}</div>
-        </article>
-        <article className="panel"><SectionHeader eyebrow="Facts-only summary" title="Core facts" /><ul className="fact-list">{workspace.factsSummary.map((fact) => <li key={fact}>{fact}</li>)}</ul></article>
-        <article className="panel terminal-panel"><SectionHeader eyebrow="Notes terminal" title="Local notes" subtitle="Styled like a terminal window and kept in local storage." /><textarea className="notes-field" value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="$ write notes about contacts, times, and follow-up questions" /></article>
-      </section>
-
-      <section className="chat-explorer-grid">
-        <article className="panel contact-browser">
-          <SectionHeader eyebrow="Chat explorer" title="Switch contacts and view full threads" subtitle="Male / female grouping is a manual organizer stored on this device. The app does not infer gender from names or messages." />
-          <div className="group-tabs">
-            <button className={contactGroupFilter === 'all' ? 'tab-button active' : 'tab-button'} onClick={() => setContactGroupFilter('all')} type="button">All ({workspace.contacts.length})</button>
-            <button className={contactGroupFilter === 'male' ? 'tab-button active' : 'tab-button'} onClick={() => setContactGroupFilter('male')} type="button">Male ({contactGroups.male})</button>
-            <button className={contactGroupFilter === 'female' ? 'tab-button active' : 'tab-button'} onClick={() => setContactGroupFilter('female')} type="button">Female ({contactGroups.female})</button>
-            <button className={contactGroupFilter === 'unknown' ? 'tab-button active' : 'tab-button'} onClick={() => setContactGroupFilter('unknown')} type="button">Unlabeled ({contactGroups.unknown})</button>
+    if (key === 'threads') {
+      return (
+        <DetailModal
+          onClose={() => setModalState(null)}
+          subtitle="Contacts with the highest visible chat volume."
+          title="Thread volume"
+        >
+          <div className="modal-list">
+            {sortContacts(workspace.contacts, 'messages').map((contact) => (
+              <button
+                className="list-button"
+                key={contact.name}
+                onClick={() => openContactModal(contact.name)}
+                type="button"
+              >
+                <div className="list-head">
+                  <strong>{contact.name}</strong>
+                  <span>{contact.messageCount} chat rows</span>
+                </div>
+                <p>
+                  Intensity {contact.intensityScore}/10, secrecy {contact.secrecyScore}/10, romance {contact.romanticScore}/10
+                </p>
+              </button>
+            ))}
           </div>
-          <label className="search-field"><span>Search contacts</span><input type="search" value={contactSearch} onChange={(event) => setContactSearch(event.target.value)} placeholder="Find contact..." /></label>
-          <div className="contact-list">{filteredContacts.map((contact) => <ContactItem active={selectedContact === contact.name} contact={contact} key={contact.name} label={contactLabels[contact.name] ?? 'unknown'} onClick={() => setSelectedContact(contact.name)} />)}{filteredContacts.length === 0 ? <p className="empty-state">No contacts matched the current filters.</p> : null}</div>
-        </article>
-        <article className="panel thread-panel">
-          <SectionHeader eyebrow="Selected thread" title={selectedContact || 'Choose a contact'} subtitle="All parsed rows linked to this contact, organized cleanly for reading and switching." />
-          {selectedSummary ? (
-            <>
-              <div className="profile-toolbar">
-                <div className="label-buttons">{(['male', 'female', 'unknown'] as ContactLabel[]).map((label) => <button className={(contactLabels[selectedSummary.name] ?? 'unknown') === label ? 'label-button active' : 'label-button'} key={label} onClick={() => setContactLabels((current) => ({ ...current, [selectedSummary.name]: label }))} type="button">{label}</button>)}</div>
-                <div className="toolbar-meta"><span>Peak hour {peakHour(selectedThread.filter((event) => event.category === 'chat'))}</span><span>Peak day {peakWeekday(selectedThread.filter((event) => event.category === 'chat'))}</span></div>
+        </DetailModal>
+      )
+    }
+
+    if (key === 'missing') {
+      return (
+        <DetailModal
+          onClose={() => setModalState(null)}
+          subtitle="Contacts that appear in friend/search metadata but have no parsed chat rows."
+          title="Missing thread candidates"
+        >
+          <div className="modal-list">
+            {missingChatContacts.map((contact) => (
+              <button
+                className="list-button"
+                key={contact.name}
+                onClick={() => openContactModal(contact.name)}
+                type="button"
+              >
+                <div className="list-head">
+                  <strong>{contact.name}</strong>
+                  <span>{contact.searchCount} search / {contact.friendEventCount} friend rows</span>
+                </div>
+                <p>Linked evidence exists, but no chat rows were parsed for this contact.</p>
+              </button>
+            ))}
+            {missingChatContacts.length === 0 ? <p className="empty-state">No missing-thread candidates.</p> : null}
+          </div>
+        </DetailModal>
+      )
+    }
+
+    if (key === 'deletions') {
+      return (
+        <DetailModal
+          onClose={() => setModalState(null)}
+          subtitle="Rows containing delete, remove, clear, block, or unsave style indicators."
+          title="Deletion and removal indicators"
+        >
+          <div className="modal-list">
+            {deletionEvents.map((event) => (
+              <button
+                className="list-button"
+                key={event.id}
+                onClick={() => setModalState({ type: 'event', eventId: event.id })}
+                type="button"
+              >
+                <div className="list-head">
+                  <strong>{event.contact ?? event.category}</strong>
+                  <span>{formatDate(event.timestamp)}</span>
+                </div>
+                <p>{compact(event.text ?? event.detail ?? event.evidenceText)}</p>
+              </button>
+            ))}
+            {deletionEvents.length === 0 ? <p className="empty-state">No deletion indicators were found.</p> : null}
+          </div>
+        </DetailModal>
+      )
+    }
+
+    if (key === 'timing') {
+      return (
+        <DetailModal
+          onClose={() => setModalState(null)}
+          subtitle="Chat timing is based on parsed chat rows when available."
+          title="Peak activity windows"
+        >
+          <div className="modal-grid two-column">
+            <article className="modal-card">
+              <h4>By hour</h4>
+              <div className="bar-list">
+                {workspace.hourBuckets.map((bucket) => (
+                  <button className="bar-row" key={bucket.hour} onClick={() => setModalState(null)} type="button">
+                    <span>{bucket.hour.toString().padStart(2, '0')}:00</span>
+                    <div className="inline-bar">
+                      <div
+                        className="inline-fill"
+                        style={{
+                          width: `${Math.max(
+                            4,
+                            (bucket.count / Math.max(...workspace.hourBuckets.map((item) => item.count), 1)) * 100,
+                          )}%`,
+                        }}
+                      />
+                    </div>
+                    <strong>{bucket.count}</strong>
+                  </button>
+                ))}
               </div>
-              <div className="contact-profile-grid">
-                <article className="profile-card"><h3>Profile facts</h3><ul className="fact-list tight"><li>{selectedSummary.interactions} linked events across {selectedSummary.activeDays} active day(s).</li><li>{selectedSummary.messageCount} chat messages and {selectedSummary.searchCount} related search event(s).</li><li>First seen {formatDate(selectedSummary.firstSeen)} and last seen {formatDate(selectedSummary.lastSeen)}.</li><li>Tone labels: {selectedSummary.topToneLabels.join(', ') || 'none'}.</li></ul></article>
-                <article className="profile-card"><h3>References</h3><div className="entity-grid compact">{selectedEntities.map((entity) => <span className="outline-pill" key={entity.id}>{entity.type}: {entity.value}</span>)}{selectedEntities.length === 0 ? <p className="empty-state">No structured references extracted for this contact.</p> : null}</div></article>
-                <article className="profile-card"><h3>Deterministic tone hits</h3><div className="tone-list">{selectedToneHits.map((hit) => <span className="outline-pill" key={`${hit.eventId}-${hit.phrase}`}>{hit.category}: {hit.phrase}</span>)}{selectedToneHits.length === 0 ? <p className="empty-state">No deterministic tone rules matched this contact.</p> : null}</div></article>
+            </article>
+            <article className="modal-card">
+              <h4>By weekday</h4>
+              <div className="bar-list">
+                {workspace.weekdayBuckets.map((bucket) => (
+                  <button className="bar-row" key={bucket.label} onClick={() => setModalState(null)} type="button">
+                    <span>{bucket.label}</span>
+                    <div className="inline-bar">
+                      <div
+                        className="inline-fill"
+                        style={{
+                          width: `${Math.max(
+                            4,
+                            (bucket.count / Math.max(...workspace.weekdayBuckets.map((item) => item.count), 1)) * 100,
+                          )}%`,
+                        }}
+                      />
+                    </div>
+                    <strong>{bucket.count}</strong>
+                  </button>
+                ))}
               </div>
-              <div className="thread-view">{selectedThread.map((event) => <article className="message-card" key={event.id}><div className="message-meta"><span className="message-type">{event.category}</span><span>{formatDate(event.timestamp)}</span></div><p>{compact(event.text ?? event.detail ?? event.locationName ?? event.evidenceText) || 'No visible text for this row.'}</p><span className="mono">[{event.id}] {event.sourceFile}</span></article>)}</div>
-            </>
-          ) : <p className="empty-state">No contact selected.</p>}
-        </article>
-      </section>
+            </article>
+          </div>
+        </DetailModal>
+      )
+    }
 
-      <section className="dashboard-grid">
-        <article className="panel"><SectionHeader eyebrow="Keyword finder" title="Search your own keywords or phrases" subtitle="Type comma-separated phrases to see every chat match." /><label className="search-field"><span>Keywords / phrases</span><textarea className="keyword-box" value={keywordQuery} onChange={(event) => setKeywordQuery(event.target.value)} /></label><div className="stack-list">{keywordHits.slice(0, 24).map(({ keyword, event }) => <article className="list-card" key={`${keyword}-${event.id}`}><div className="list-head"><strong>{keyword}</strong><span>{event.contact ?? 'Unknown contact'}</span></div><p>{compact(event.text)}</p><span className="mono">[{event.id}] {formatDate(event.timestamp)}</span></article>)}{keywordHits.length === 0 ? <p className="empty-state">No custom keyword hits matched the current workspace.</p> : null}</div></article>
-        <article className="panel"><SectionHeader eyebrow="Patterns and entities" title="Recurring names, handles, links, emails, phones, and locations" /><div className="stack-list">{workspace.entities.slice(0, 14).map((entity) => <article className="list-card" key={entity.id}><div className="list-head"><strong>{entity.value}</strong><span>{entity.type}</span></div><p>{entity.count} mention(s) across {entity.uploads.length} upload(s).</p></article>)}</div></article>
-      </section>
+    return (
+      <DetailModal
+        onClose={() => setModalState(null)}
+        subtitle="Supported and skipped files from every loaded upload."
+        title="File coverage"
+      >
+        <div className="modal-list">
+          {workspace.fileSummaries.map((file) => (
+            <button
+              className="list-button"
+              key={`${file.uploadId}-${file.path}`}
+              onClick={() => setModalState({ type: 'file', path: file.path, uploadId: file.uploadId })}
+              type="button"
+            >
+              <div className="list-head">
+                <strong>{file.path}</strong>
+                <span>{file.rows} rows</span>
+              </div>
+              <p>
+                {file.category} / {file.supported ? 'supported' : 'skipped'}
+              </p>
+            </button>
+          ))}
+        </div>
+      </DetailModal>
+    )
+  }
 
-      <section className="dashboard-grid">
-        <article className="panel"><SectionHeader eyebrow="Activity windows" title="Timeline and time patterns" /><div className="timeline-chart">{workspace.timeline.slice(-18).map((bucket) => <div className="timeline-bar" key={bucket.key}><div className="timeline-fill" style={{ height: `${Math.max(10, (bucket.count / Math.max(...workspace.timeline.map((item) => item.count), 1)) * 100)}%` }} /><strong>{bucket.count}</strong><span>{bucket.label}</span></div>)}</div></article>
-        <article className="panel"><SectionHeader eyebrow="Signals" title="Deterministic findings" /><div className="stack-list">{workspace.signals.map((signal) => <article className="signal-card" key={signal.id}><div className="list-head"><strong>{signal.title}</strong><span className={`contact-label label-${signal.severity === 'high' ? 'female' : signal.severity === 'medium' ? 'unknown' : 'male'}`}>{signal.severity}</span></div><p>{signal.summary}</p><span>{signal.explanation}</span></article>)}</div></article>
-      </section>
+  function renderModal() {
+    if (!modalState) return null
 
-      <section className="dashboard-grid">
-        <article className="panel"><SectionHeader eyebrow="AI findings" title="Grounded model output" subtitle="The AI path chunks long chat history and then synthesizes a final answer against the deterministic context." />{aiResult ? <article className="ai-result"><div className="list-head"><strong>{aiResult.provider} / {aiResult.model}</strong><span>{formatDate(aiResult.createdAt)}</span></div><p className="ai-question">{aiResult.question}</p><pre>{aiResult.answer}</pre></article> : <p className="empty-state">No AI analysis has been run yet.</p>}</article>
-        <article className="panel"><SectionHeader eyebrow="Evidence viewer" title="Traceable source snippets" /><div className="stack-list">{workspace.evidenceSnippets.slice(0, 14).map((snippet) => <article className="evidence-card" key={snippet.eventId}><div className="list-head"><strong>{snippet.label}</strong><span>{formatDate(snippet.timestamp)}</span></div><p>{snippet.excerpt}</p><span className="mono">[{snippet.eventId}] {snippet.sourceFile}</span></article>)}</div></article>
-      </section>
-    </main>
+    if (modalState.type === 'metric') {
+      return renderMetricModal(modalState.key)
+    }
+
+    if (modalState.type === 'contact') {
+      const summary = contactIndex.get(modalState.contactName)
+      if (!summary) return null
+      const thread = eventsByContact.get(summary.name) ?? []
+      const modalTerms = queryTermsFromInput(deferredThreadSearch)
+      const visibleThread = thread.filter((event) => {
+        if (threadMode === 'chat' && event.category !== 'chat') return false
+        if (!modalTerms.length) return true
+        const haystack = compact(
+          [event.text, event.detail, event.evidenceText, event.sourceFile].filter(Boolean).join(' '),
+        ).toLowerCase()
+        return modalTerms.some((term) => haystack.includes(term))
+      })
+      const contactEntities = workspace.entities
+        .filter((entity) => entity.contacts.includes(summary.name))
+        .slice(0, 12)
+      const contactHits = workspace.keywordHits.filter((hit) => hit.contact === summary.name)
+
+      return (
+        <DetailModal
+          onClose={() => setModalState(null)}
+          subtitle="Full thread view with every parsed row linked to this contact."
+          title={summary.name}
+        >
+          <div className="modal-toolbar">
+            <div className="button-row">
+              <button className="ghost-button" onClick={() => moveModalContact(-1)} type="button">
+                Prev contact
+              </button>
+              <button className="ghost-button" onClick={() => moveModalContact(1)} type="button">
+                Next contact
+              </button>
+            </div>
+            <div className="button-row">
+              {(['male', 'female', 'unknown'] as ContactLabel[]).map((label) => (
+                <button
+                  className={
+                    (contactLabels[summary.name] ?? 'unknown') === label
+                      ? 'label-button active'
+                      : 'label-button'
+                  }
+                  key={label}
+                  onClick={() => setContactLabels((current) => ({ ...current, [summary.name]: label }))}
+                  type="button"
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="modal-grid contact-modal-grid">
+            <aside className="modal-aside">
+              <article className="modal-card">
+                <h4>Conversation profile</h4>
+                <div className="score-row">
+                  <ScorePill label="Romance" value={summary.romanticScore} />
+                  <ScorePill label="Secrecy" value={summary.secrecyScore} />
+                  <ScorePill label="Intensity" value={summary.intensityScore} />
+                </div>
+                <ul className="fact-list tight">
+                  <li>{summary.messageCount} chat rows across {summary.activeDays} active days.</li>
+                  <li>{summary.searchCount} search rows and {summary.friendEventCount} friend rows.</li>
+                  <li>
+                    Peak time{' '}
+                    {summary.peakHour !== null
+                      ? `${summary.peakHour.toString().padStart(2, '0')}:00`
+                      : 'Unknown'}{' '}
+                    on {summary.peakWeekday ?? 'Unknown'}.
+                  </li>
+                  <li>Deletion indicators: {summary.deletionIndicators}.</li>
+                  <li>First seen {formatDate(summary.firstSeen)}.</li>
+                  <li>Last seen {formatDate(summary.lastSeen)}.</li>
+                </ul>
+              </article>
+              <article className="modal-card">
+                <h4>References</h4>
+                <div className="entity-grid compact">
+                  {contactEntities.map((entity) => (
+                    <button
+                      className="outline-pill clickable-pill"
+                      key={entity.id}
+                      onClick={() => {
+                        setSearchQuery(entity.value)
+                        setActiveTab('search')
+                        setModalState(null)
+                      }}
+                      type="button"
+                    >
+                      {entity.type}: {entity.value}
+                    </button>
+                  ))}
+                  {!contactEntities.length ? (
+                    <p className="empty-state">No extracted entities for this contact.</p>
+                  ) : null}
+                </div>
+              </article>
+              <article className="modal-card">
+                <h4>Patterns</h4>
+                <div className="stack-list compact-stack">
+                  {summary.topPhrases.map((phrase) => (
+                    <button
+                      className="outline-pill clickable-pill"
+                      key={phrase}
+                      onClick={() => setThreadSearch(phrase)}
+                      type="button"
+                    >
+                      {phrase}
+                    </button>
+                  ))}
+                  {contactHits.slice(0, 8).map((hit) => (
+                    <button
+                      className="outline-pill clickable-pill"
+                      key={`${hit.eventId}-${hit.phrase}`}
+                      onClick={() => setModalState({ type: 'event', eventId: hit.eventId })}
+                      type="button"
+                    >
+                      {hit.category}: {hit.phrase}
+                    </button>
+                  ))}
+                  {!summary.topPhrases.length && !contactHits.length ? (
+                    <p className="empty-state">No repeated phrases or rule hits linked to this contact.</p>
+                  ) : null}
+                </div>
+              </article>
+            </aside>
+
+            <section className="modal-main">
+              <div className="thread-toolbar">
+                <div className="button-row">
+                  <button
+                    className={threadMode === 'chat' ? 'tab-button active' : 'tab-button'}
+                    onClick={() => setThreadMode('chat')}
+                    type="button"
+                  >
+                    Chat only
+                  </button>
+                  <button
+                    className={threadMode === 'all' ? 'tab-button active' : 'tab-button'}
+                    onClick={() => setThreadMode('all')}
+                    type="button"
+                  >
+                    All linked rows
+                  </button>
+                </div>
+                <label className="search-field inline-search">
+                  <span>Find inside thread</span>
+                  <input
+                    onChange={(event) => setThreadSearch(event.target.value)}
+                    placeholder="Name, phrase, delete, address..."
+                    type="search"
+                    value={threadSearch}
+                  />
+                </label>
+              </div>
+
+              <div className="thread-scroll">
+                {visibleThread.map((event) => {
+                  const excerpt =
+                    compact(event.text ?? event.detail ?? event.evidenceText) ||
+                    'No visible text for this row.'
+                  return (
+                    <button
+                      className="message-row"
+                      key={event.id}
+                      onClick={() => setModalState({ type: 'event', eventId: event.id })}
+                      type="button"
+                    >
+                      <div className="message-meta">
+                        <span className="message-type">{event.category}</span>
+                        <span>{formatDate(event.timestamp)}</span>
+                      </div>
+                      <p>
+                        <HighlightedText terms={modalTerms} text={excerpt} />
+                      </p>
+                      <span className="mono">
+                        [{event.id}] {event.sourceFile}
+                      </span>
+                    </button>
+                  )
+                })}
+                {visibleThread.length === 0 ? (
+                  <p className="empty-state">No rows matched the current thread filter.</p>
+                ) : null}
+              </div>
+            </section>
+          </div>
+        </DetailModal>
+      )
+    }
+
+    if (modalState.type === 'event') {
+      const event = eventsById.get(modalState.eventId)
+      if (!event) return null
+
+      return (
+        <DetailModal
+          onClose={() => setModalState(null)}
+          subtitle={event.sourceFile}
+          title={`Row ${event.id}`}
+        >
+          <div className="modal-grid two-column">
+            <article className="modal-card">
+              <h4>Observed values</h4>
+              <ul className="fact-list tight">
+                <li>Timestamp: {formatDate(event.timestamp)}</li>
+                <li>Category: {event.category}</li>
+                <li>Subtype: {event.subtype ?? 'Unknown'}</li>
+                <li>Contact: {event.contact ?? 'Unknown'}</li>
+                <li>Detail: {event.detail ?? 'None'}</li>
+                <li>Location: {event.locationName ?? 'None'}</li>
+                <li>Device: {event.device ?? 'None'}</li>
+                <li>Region: {event.region ?? 'None'}</li>
+              </ul>
+            </article>
+            <article className="modal-card">
+              <h4>Full text</h4>
+              <p className="raw-block">
+                {compact(event.text ?? event.detail ?? event.evidenceText) || 'No visible text.'}
+              </p>
+              <h4>Raw fields</h4>
+              <pre className="json-block">{JSON.stringify(event.attributes, null, 2)}</pre>
+            </article>
+          </div>
+        </DetailModal>
+      )
+    }
+
+    if (modalState.type === 'signal') {
+      const signal = signalIndex.get(modalState.signalId)
+      if (!signal) return null
+      const evidence = signal.evidenceIds
+        .map((eventId) => eventsById.get(eventId))
+        .filter((event): event is NormalizedEvent => Boolean(event))
+
+      return (
+        <DetailModal
+          onClose={() => setModalState(null)}
+          subtitle={`${signal.type} / ${signal.severity} / score ${signal.score}`}
+          title={signal.title}
+        >
+          <article className="modal-card">
+            <p>{signal.summary}</p>
+            <p className="section-copy">{signal.explanation}</p>
+          </article>
+          <div className="modal-list">
+            {evidence.map((event) => (
+              <button
+                className="list-button"
+                key={event.id}
+                onClick={() => setModalState({ type: 'event', eventId: event.id })}
+                type="button"
+              >
+                <div className="list-head">
+                  <strong>{event.contact ?? event.category}</strong>
+                  <span>{formatDate(event.timestamp)}</span>
+                </div>
+                <p>{compact(event.text ?? event.detail ?? event.evidenceText)}</p>
+              </button>
+            ))}
+          </div>
+        </DetailModal>
+      )
+    }
+
+    if (modalState.type === 'upload') {
+      const upload = uploadIndex.get(modalState.uploadId)
+      const files = fileSummariesByUpload.get(modalState.uploadId) ?? []
+      if (!upload) return null
+
+      return (
+        <DetailModal
+          onClose={() => setModalState(null)}
+          subtitle={upload.fileName}
+          title="Upload details"
+        >
+          <div className="modal-grid two-column">
+            <article className="modal-card">
+              <h4>Upload summary</h4>
+              <ul className="fact-list tight">
+                <li>Size: {formatBytes(upload.sizeBytes)}</li>
+                <li>Processed: {formatDate(upload.processedAt)}</li>
+                <li>Supported files: {upload.supportedFiles}</li>
+                <li>Skipped files: {upload.unsupportedFiles}</li>
+                <li>Account: {upload.account.displayName ?? upload.account.username ?? 'Unknown'}</li>
+                <li>Email: {upload.account.email ?? 'Unknown'}</li>
+                <li>Phone: {upload.account.phone ?? 'Unknown'}</li>
+              </ul>
+            </article>
+            <article className="modal-card">
+              <h4>Files</h4>
+              <div className="modal-list compact-stack">
+                {files.map((file) => (
+                  <button
+                    className="list-button"
+                    key={file.path}
+                    onClick={() => setModalState({ type: 'file', path: file.path, uploadId: upload.id })}
+                    type="button"
+                  >
+                    <div className="list-head">
+                      <strong>{file.path}</strong>
+                      <span>{file.rows} rows</span>
+                    </div>
+                    <p>
+                      {file.category} / {file.supported ? 'supported' : 'skipped'}
+                    </p>
+                  </button>
+                ))}
+              </div>
+            </article>
+          </div>
+        </DetailModal>
+      )
+    }
+
+    if (modalState.type === 'file') {
+      const file = workspace.fileSummaries.find(
+        (entry) => entry.uploadId === modalState.uploadId && entry.path === modalState.path,
+      )
+      const fileEvents = workspace.events.filter(
+        (event) => event.uploadId === modalState.uploadId && event.sourceFile === modalState.path,
+      )
+      if (!file) return null
+
+      return (
+        <DetailModal
+          onClose={() => setModalState(null)}
+          subtitle={`${file.category} / ${file.supported ? 'supported' : 'skipped'}`}
+          title={file.path}
+        >
+          <article className="modal-card">
+            <p>{file.rows} normalized rows recovered from this source file.</p>
+          </article>
+          <div className="modal-list">
+            {fileEvents.map((event) => (
+              <button
+                className="list-button"
+                key={event.id}
+                onClick={() => setModalState({ type: 'event', eventId: event.id })}
+                type="button"
+              >
+                <div className="list-head">
+                  <strong>{event.contact ?? event.category}</strong>
+                  <span>{formatDate(event.timestamp)}</span>
+                </div>
+                <p>{compact(event.text ?? event.detail ?? event.evidenceText)}</p>
+              </button>
+            ))}
+            {fileEvents.length === 0 ? (
+              <p className="empty-state">No normalized events were produced from this file.</p>
+            ) : null}
+          </div>
+        </DetailModal>
+      )
+    }
+
+    if (modalState.type === 'timeline') {
+      const bucket = workspace.timeline.find((item) => item.key === modalState.dayKey)
+      const events = workspace.events.filter((event) => event.timestamp?.startsWith(modalState.dayKey))
+      if (!bucket) return null
+
+      return (
+        <DetailModal
+          onClose={() => setModalState(null)}
+          subtitle={`${bucket.count} event${bucket.count === 1 ? '' : 's'}`}
+          title={`Timeline detail for ${bucket.label}`}
+        >
+          <article className="modal-card">
+            <div className="category-pills">
+              {Object.entries(bucket.categories).map(([category, count]) => (
+                <span className="outline-pill" key={category}>
+                  {category}: {count}
+                </span>
+              ))}
+            </div>
+          </article>
+          <div className="modal-list">
+            {events.map((event) => (
+              <button
+                className="list-button"
+                key={event.id}
+                onClick={() => setModalState({ type: 'event', eventId: event.id })}
+                type="button"
+              >
+                <div className="list-head">
+                  <strong>{event.contact ?? event.category}</strong>
+                  <span>{formatDate(event.timestamp)}</span>
+                </div>
+                <p>{compact(event.text ?? event.detail ?? event.evidenceText)}</p>
+              </button>
+            ))}
+          </div>
+        </DetailModal>
+      )
+    }
+
+    return null
+  }
+
+  return (
+    <>
+      <main className="app-shell">
+        <header className="masthead">
+          <div>
+            <p className="eyebrow">Kali-style communication intelligence</p>
+            <h1>Export Viewer Pro</h1>
+            <p className="section-copy">
+              Compact dashboard for Snapchat export review with click-through threads, entity
+              search, timing analysis, and optional AI summarization.
+            </p>
+          </div>
+          <div className="masthead-actions">
+            <label className="primary-button file-picker">
+              <input accept=".zip" multiple onChange={handleZipUpload} type="file" />
+              {isLoadingZip ? 'Parsing zip...' : 'Upload zip'}
+            </label>
+            <button className="secondary-button" onClick={() => folderInputRef.current?.click()} type="button">
+              {isLoadingFolder ? 'Parsing folder...' : 'Load extracted folder'}
+            </button>
+            <button className="ghost-button" onClick={() => setUploads([sampleUpload])} type="button">
+              Reset demo
+            </button>
+            <input
+              ref={folderInputRef}
+              multiple
+              onChange={handleFolderUpload}
+              style={{ display: 'none' }}
+              type="file"
+            />
+          </div>
+        </header>
+
+        <section className="toolbar-panel">
+          <div>
+            <p>{status}</p>
+            {error ? <p className="error-line">{error}</p> : null}
+          </div>
+          <div className="button-row">
+            <button className="chip-button" onClick={() => downloadEventsJson(workspace.events)} type="button">
+              Events JSON
+            </button>
+            <button className="chip-button" onClick={() => downloadContactsCsv(workspace.contacts)} type="button">
+              Contacts CSV
+            </button>
+            <button className="chip-button" onClick={() => downloadKeywordHitsCsv(workspace.keywordHits)} type="button">
+              Tone CSV
+            </button>
+            <button className="chip-button" onClick={() => downloadWorkspaceReport(workspace)} type="button">
+              Report JSON
+            </button>
+          </div>
+        </section>
+
+        <nav className="tab-bar" aria-label="Dashboard sections">
+          {TAB_LABELS.map((tab) => (
+            <button
+              className={activeTab === tab.id ? 'tab-button active' : 'tab-button'}
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              type="button"
+            >
+              {tab.label}
+            </button>
+          ))}
+        </nav>
+
+        {activeTab === 'overview' ? (
+          <>
+            <section className="stats-grid">
+              <MetricButton
+                caption="All distinct contacts."
+                label="People total"
+                onClick={() => openMetricModal('contacts')}
+                value={workspace.stats.uniqueContacts}
+              />
+              <MetricButton
+                caption="Visible parsed chat rows."
+                label="Chat rows"
+                onClick={() => openMetricModal('threads')}
+                value={workspace.stats.chatEvents}
+              />
+              <MetricButton
+                caption="Search/friend rows with no chat thread."
+                label="Missing threads"
+                onClick={() => openMetricModal('missing')}
+                value={workspace.stats.missingChatContacts}
+              />
+              <MetricButton
+                caption="Delete, remove, clear, block, unsave."
+                label="Deletion indicators"
+                onClick={() => openMetricModal('deletions')}
+                value={workspace.stats.deletionIndicators}
+              />
+              <MetricButton
+                caption={`Peak day ${peakWeekdayLabel(workspace.weekdayBuckets)}`}
+                label="Peak chat time"
+                onClick={() => openMetricModal('timing')}
+                value={peakHourLabel(workspace.hourBuckets)}
+              />
+              <MetricButton
+                caption={`${workspace.stats.unsupportedFiles} skipped`}
+                label="Supported files"
+                onClick={() => openMetricModal('files')}
+                value={workspace.stats.supportedFiles}
+              />
+            </section>
+
+            <section className="dashboard-grid">
+              <article className="panel">
+                <SectionHeader
+                  eyebrow="Priority review"
+                  subtitle="Contacts with the strongest combined intensity, secrecy, and romantic-tone scores."
+                  title="Top contact priorities"
+                />
+                <div className="stack-list scroll-stack">
+                  {priorityContacts.map((contact) => (
+                    <button
+                      className="list-button"
+                      key={contact.name}
+                      onClick={() => openContactModal(contact.name)}
+                      type="button"
+                    >
+                      <div className="list-head">
+                        <strong>{contact.name}</strong>
+                        <span>{contact.messageCount} chat rows</span>
+                      </div>
+                      <div className="score-row">
+                        <ScorePill label="Romance" value={contact.romanticScore} />
+                        <ScorePill label="Secrecy" value={contact.secrecyScore} />
+                        <ScorePill label="Intensity" value={contact.intensityScore} />
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </article>
+
+              <article className="panel">
+                <SectionHeader
+                  eyebrow="Uploads"
+                  subtitle="Use extracted-folder import for very large exports. It skips media and keeps the data pass responsive."
+                  title="Loaded accounts and provenance"
+                />
+                <div className="stack-list scroll-stack">
+                  {workspace.uploads.map((upload) => (
+                    <button
+                      className="list-button"
+                      key={upload.id}
+                      onClick={() => setModalState({ type: 'upload', uploadId: upload.id })}
+                      type="button"
+                    >
+                      <div className="list-head">
+                        <strong>{upload.fileName}</strong>
+                        <span>{formatBytes(upload.sizeBytes)}</span>
+                      </div>
+                      <p>
+                        {upload.account.displayName ?? upload.account.username ?? 'Unknown account'} / {upload.supportedFiles} supported files
+                      </p>
+                    </button>
+                  ))}
+                </div>
+              </article>
+            </section>
+
+            <section className="dashboard-grid">
+              <article className="panel">
+                <SectionHeader eyebrow="Facts" title="Evidence-backed summary" />
+                <ul className="fact-list">
+                  {workspace.factsSummary.map((fact) => (
+                    <li key={fact}>{fact}</li>
+                  ))}
+                </ul>
+              </article>
+              <article className="panel terminal-panel">
+                <SectionHeader
+                  eyebrow="Notes terminal"
+                  subtitle="Local-only notes for follow-up questions, timestamps, or contact labels."
+                  title="Working notes"
+                />
+                <textarea
+                  className="notes-field"
+                  onChange={(event) => setNotes(event.target.value)}
+                  placeholder="$ note contacts, dates, questions, and follow-up checks"
+                  value={notes}
+                />
+              </article>
+            </section>
+          </>
+        ) : null}
+
+        {activeTab === 'chats' ? (
+          <section className="chat-layout">
+            <article className="panel chat-sidebar">
+              <SectionHeader
+                actions={
+                  <span className="outline-pill">
+                    manual labels: {contactGroups.male}/{contactGroups.female}/{contactGroups.unknown}
+                  </span>
+                }
+                eyebrow="Contact browser"
+                subtitle="Local labels remain manual. The app does not infer gender from names or messages."
+                title="Contacts"
+              />
+              <div className="filter-grid">
+                <label className="search-field">
+                  <span>Search</span>
+                  <input
+                    onChange={(event) => setContactSearch(event.target.value)}
+                    placeholder="Find contact..."
+                    type="search"
+                    value={contactSearch}
+                  />
+                </label>
+                <label className="search-field">
+                  <span>Sort</span>
+                  <select value={contactSort} onChange={(event) => setContactSort(event.target.value as ContactSort)}>
+                    <option value="activity">Activity</option>
+                    <option value="messages">Messages</option>
+                    <option value="romance">Romance score</option>
+                    <option value="secrecy">Secrecy score</option>
+                    <option value="recent">Recent shift</option>
+                    <option value="missing">Missing threads</option>
+                  </select>
+                </label>
+              </div>
+              <div className="group-tabs">
+                <button className={contactGroupFilter === 'all' ? 'tab-button active' : 'tab-button'} onClick={() => setContactGroupFilter('all')} type="button">
+                  All ({workspace.contacts.length})
+                </button>
+                <button className={contactGroupFilter === 'male' ? 'tab-button active' : 'tab-button'} onClick={() => setContactGroupFilter('male')} type="button">
+                  Male ({contactGroups.male})
+                </button>
+                <button className={contactGroupFilter === 'female' ? 'tab-button active' : 'tab-button'} onClick={() => setContactGroupFilter('female')} type="button">
+                  Female ({contactGroups.female})
+                </button>
+                <button className={contactGroupFilter === 'unknown' ? 'tab-button active' : 'tab-button'} onClick={() => setContactGroupFilter('unknown')} type="button">
+                  Unlabeled ({contactGroups.unknown})
+                </button>
+              </div>
+              <div className="contact-table">
+                {filteredContacts.map((contact) => (
+                  <button
+                    className={selectedSummary?.name === contact.name ? 'contact-row active' : 'contact-row'}
+                    key={contact.name}
+                    onClick={() => setSelectedContact(contact.name)}
+                    type="button"
+                  >
+                    <div className="contact-row-main">
+                      <strong>{contact.name}</strong>
+                      <span>{contact.messageCount} chat rows</span>
+                    </div>
+                    <div className="contact-row-meta">
+                      <ScorePill label="R" value={contact.romanticScore} />
+                      <ScorePill label="S" value={contact.secrecyScore} />
+                      <ScorePill label="I" value={contact.intensityScore} />
+                    </div>
+                  </button>
+                ))}
+                {filteredContacts.length === 0 ? (
+                  <p className="empty-state">No contacts matched the current filter.</p>
+                ) : null}
+              </div>
+            </article>
+
+            <article className="panel chat-preview-panel">
+              <SectionHeader
+                actions={
+                  selectedSummary ? (
+                    <button className="primary-button" onClick={() => openContactModal(selectedSummary.name)} type="button">
+                      Open full thread
+                    </button>
+                  ) : null
+                }
+                eyebrow="Selected contact"
+                subtitle="Compact preview. Open the thread modal for the complete chat and raw rows."
+                title={selectedSummary?.name ?? 'Choose a contact'}
+              />
+              {selectedSummary ? (
+                <>
+                  <div className="contact-summary-grid">
+                    <article className="mini-stat">
+                      <span>Messages</span>
+                      <strong>{selectedSummary.messageCount}</strong>
+                    </article>
+                    <article className="mini-stat">
+                      <span>Active days</span>
+                      <strong>{selectedSummary.activeDays}</strong>
+                    </article>
+                    <article className="mini-stat">
+                      <span>Peak time</span>
+                      <strong>
+                        {selectedSummary.peakHour !== null
+                          ? `${selectedSummary.peakHour.toString().padStart(2, '0')}:00`
+                          : 'Unknown'}
+                      </strong>
+                    </article>
+                    <article className="mini-stat">
+                      <span>Missing thread</span>
+                      <strong>{selectedSummary.missingChat ? 'Yes' : 'No'}</strong>
+                    </article>
+                  </div>
+
+                  <div className="score-row">
+                    <ScorePill label="Romance" value={selectedSummary.romanticScore} />
+                    <ScorePill label="Secrecy" value={selectedSummary.secrecyScore} />
+                    <ScorePill label="Intensity" value={selectedSummary.intensityScore} />
+                  </div>
+
+                  <div className="button-row">
+                    {(['male', 'female', 'unknown'] as ContactLabel[]).map((label) => (
+                      <button
+                        className={(contactLabels[selectedSummary.name] ?? 'unknown') === label ? 'label-button active' : 'label-button'}
+                        key={label}
+                        onClick={() => setContactLabels((current) => ({ ...current, [selectedSummary.name]: label }))}
+                        type="button"
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+
+                  <article className="subpanel">
+                    <h3>Recent visible messages</h3>
+                    <div className="stack-list scroll-stack short-scroll">
+                      {selectedPreviewEvents.map((event) => (
+                        <button
+                          className="list-button"
+                          key={event.id}
+                          onClick={() => setModalState({ type: 'event', eventId: event.id })}
+                          type="button"
+                        >
+                          <div className="list-head">
+                            <strong>{formatDate(event.timestamp)}</strong>
+                            <span>{event.category}</span>
+                          </div>
+                          <p>{compact(event.text ?? event.detail ?? event.evidenceText)}</p>
+                        </button>
+                      ))}
+                      {selectedPreviewEvents.length === 0 ? <p className="empty-state">No recent chat rows available.</p> : null}
+                    </div>
+                  </article>
+
+                  <article className="subpanel">
+                    <h3>Missing thread candidates</h3>
+                    <div className="stack-list compact-stack">
+                      {missingChatContacts.slice(0, 5).map((contact) => (
+                        <button className="list-button" key={contact.name} onClick={() => openContactModal(contact.name)} type="button">
+                          <div className="list-head">
+                            <strong>{contact.name}</strong>
+                            <span>{contact.searchCount} search / {contact.friendEventCount} friend</span>
+                          </div>
+                          <p>No chat rows were recovered for this contact.</p>
+                        </button>
+                      ))}
+                      {missingChatContacts.length === 0 ? <p className="empty-state">No missing-thread contacts detected.</p> : null}
+                    </div>
+                  </article>
+                </>
+              ) : (
+                <p className="empty-state">No contact selected.</p>
+              )}
+            </article>
+          </section>
+        ) : null}
+
+        {activeTab === 'search' ? (
+          <section className="dashboard-grid">
+            <article className="panel">
+              <SectionHeader
+                eyebrow="Reference search"
+                subtitle="Search names, handles, words, or phrases across all parsed rows. Multiple terms are supported with commas or new lines."
+                title="Keyword and name finder"
+              />
+              <label className="search-field">
+                <span>Terms</span>
+                <textarea
+                  className="keyword-box"
+                  onChange={(event) => setSearchQuery(event.target.value)}
+                  placeholder="Jordan, address, delete this, hotel"
+                  value={searchQuery}
+                />
+              </label>
+              <div className="result-meta">
+                <span>{searchHits.length} matching row(s)</span>
+                <span>{searchTerms.length} active term(s)</span>
+              </div>
+              <div className="stack-list scroll-stack medium-scroll">
+                {searchHits.map((event) => (
+                  <button
+                    className="list-button"
+                    key={event.id}
+                    onClick={() => setModalState({ type: 'event', eventId: event.id })}
+                    type="button"
+                  >
+                    <div className="list-head">
+                      <strong>{event.contact ?? event.category}</strong>
+                      <span>{formatDate(event.timestamp)}</span>
+                    </div>
+                    <p>
+                      <HighlightedText
+                        terms={searchTerms}
+                        text={compact(event.text ?? event.detail ?? event.evidenceText)}
+                      />
+                    </p>
+                    <span className="mono">{event.sourceFile}</span>
+                  </button>
+                ))}
+                {searchTerms.length === 0 ? <p className="empty-state">Enter one or more search terms.</p> : null}
+                {searchTerms.length > 0 && searchHits.length === 0 ? (
+                  <p className="empty-state">No rows matched the current terms.</p>
+                ) : null}
+              </div>
+            </article>
+
+            <article className="panel">
+              <SectionHeader
+                eyebrow="Structured references"
+                subtitle="Click an entity or phrase to push it into the search view immediately."
+                title="Entities and repeated phrases"
+              />
+              <div className="subpanel">
+                <h3>Entities</h3>
+                <div className="stack-list scroll-stack short-scroll">
+                  {workspace.entities.slice(0, 18).map((entity) => (
+                    <button
+                      className="list-button"
+                      key={entity.id}
+                      onClick={() => setSearchQuery(entity.value)}
+                      type="button"
+                    >
+                      <div className="list-head">
+                        <strong>{entity.value}</strong>
+                        <span>{entity.type}</span>
+                      </div>
+                      <p>{entity.count} mention(s) across {entity.contacts.length} contact(s).</p>
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="subpanel">
+                <h3>Repeated phrases</h3>
+                <div className="entity-grid compact">
+                  {workspace.repeatedPhrases.map((phrase) => (
+                    <button
+                      className="outline-pill clickable-pill"
+                      key={phrase.phrase}
+                      onClick={() => setSearchQuery(phrase.phrase)}
+                      type="button"
+                    >
+                      {phrase.phrase} ({phrase.count})
+                    </button>
+                  ))}
+                  {workspace.repeatedPhrases.length === 0 ? (
+                    <p className="empty-state">No repeated phrases above threshold.</p>
+                  ) : null}
+                </div>
+              </div>
+            </article>
+          </section>
+        ) : null}
+
+        {activeTab === 'signals' ? (
+          <section className="dashboard-grid">
+            <article className="panel">
+              <SectionHeader
+                eyebrow="Signals"
+                subtitle="Deterministic findings only. Click any card to inspect the linked evidence."
+                title="Findings"
+              />
+              <div className="stack-list scroll-stack medium-scroll">
+                {workspace.signals.map((signal) => (
+                  <button
+                    className="signal-button"
+                    key={signal.id}
+                    onClick={() => setModalState({ type: 'signal', signalId: signal.id })}
+                    type="button"
+                  >
+                    <div className="list-head">
+                      <strong>{signal.title}</strong>
+                      <span className={`score-pill score-${signal.severity}`}>{signal.severity}</span>
+                    </div>
+                    <p>{signal.summary}</p>
+                    <span>{signal.explanation}</span>
+                  </button>
+                ))}
+              </div>
+            </article>
+
+            <article className="panel">
+              <SectionHeader
+                eyebrow="Timeline"
+                subtitle="Click a day to inspect all rows in that period."
+                title="Notable periods and event clusters"
+              />
+              <div className="timeline-chart compact-chart">
+                {workspace.timeline.slice(-21).map((bucket) => (
+                  <button
+                    className="timeline-bar button-bar"
+                    key={bucket.key}
+                    onClick={() => setModalState({ type: 'timeline', dayKey: bucket.key })}
+                    type="button"
+                  >
+                    <div
+                      className="timeline-fill"
+                      style={{
+                        height: `${Math.max(
+                          10,
+                          (bucket.count / Math.max(...workspace.timeline.map((item) => item.count), 1)) * 100,
+                        )}%`,
+                      }}
+                    />
+                    <strong>{bucket.count}</strong>
+                    <span>{bucket.label}</span>
+                  </button>
+                ))}
+              </div>
+              <div className="subpanel">
+                <h3>Deletion / removal rows</h3>
+                <div className="stack-list scroll-stack short-scroll">
+                  {deletionEvents.map((event) => (
+                    <button
+                      className="list-button"
+                      key={event.id}
+                      onClick={() => setModalState({ type: 'event', eventId: event.id })}
+                      type="button"
+                    >
+                      <div className="list-head">
+                        <strong>{event.contact ?? event.category}</strong>
+                        <span>{formatDay(event.timestamp)}</span>
+                      </div>
+                      <p>{compact(event.text ?? event.detail ?? event.evidenceText)}</p>
+                    </button>
+                  ))}
+                  {deletionEvents.length === 0 ? <p className="empty-state">No deletion indicators detected.</p> : null}
+                </div>
+              </div>
+            </article>
+          </section>
+        ) : null}
+
+        {activeTab === 'ai' ? (
+          <section className="dashboard-grid">
+            <article className="panel">
+              <SectionHeader
+                eyebrow="AI setup"
+                subtitle="Optional. Keys stay in session storage and deterministic analytics still work without AI."
+                title="Provider and model"
+              />
+              <div className="settings-grid">
+                <label>
+                  <span>Provider</span>
+                  <select
+                    onChange={(event) =>
+                      setAiSettings((current) => ({
+                        ...current,
+                        provider: event.target.value as AIProvider,
+                        model:
+                          current.provider === event.target.value
+                            ? current.model
+                            : DEFAULT_MODELS[event.target.value as AIProvider],
+                      }))
+                    }
+                    value={aiSettings.provider}
+                  >
+                    <option value="gemini">Gemini</option>
+                    <option value="openai">OpenAI</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Model</span>
+                  <input
+                    onChange={(event) =>
+                      setAiSettings((current) => ({ ...current, model: event.target.value }))
+                    }
+                    type="text"
+                    value={aiSettings.model}
+                  />
+                </label>
+                <label className="span-two">
+                  <span>API key</span>
+                  <input
+                    onChange={(event) =>
+                      setAiSettings((current) => ({ ...current, apiKey: event.target.value }))
+                    }
+                    placeholder="Paste API key"
+                    type="password"
+                    value={aiSettings.apiKey}
+                  />
+                </label>
+                <label className="span-two">
+                  <span>Analysis prompt</span>
+                  <textarea
+                    className="ai-prompt"
+                    onChange={(event) => setAiQuestion(event.target.value)}
+                    value={aiQuestion}
+                  />
+                </label>
+              </div>
+              <div className="hero-pills">
+                {MODEL_PRESETS[aiSettings.provider].map((model) => (
+                  <button
+                    className={aiSettings.model === model ? 'chip-button active-chip' : 'chip-button'}
+                    key={model}
+                    onClick={() => setAiSettings((current) => ({ ...current, model }))}
+                    type="button"
+                  >
+                    {model}
+                  </button>
+                ))}
+              </div>
+              <button className="primary-button full-width" onClick={handleAiRun} type="button">
+                {isAiLoading ? 'Analyzing full chat history...' : 'Run AI over full chat history'}
+              </button>
+              {aiError ? <p className="error-line">{aiError}</p> : null}
+            </article>
+
+            <article className="panel">
+              <SectionHeader
+                eyebrow="AI output"
+                subtitle="The model receives deterministic context plus chunked chat history and must cite evidence IDs."
+                title="Analysis result"
+              />
+              {aiResult ? (
+                <article className="ai-result">
+                  <div className="list-head">
+                    <strong>
+                      {aiResult.provider} / {aiResult.model}
+                    </strong>
+                    <span>{formatDate(aiResult.createdAt)}</span>
+                  </div>
+                  <p className="ai-question">{aiResult.question}</p>
+                  <pre>{aiResult.answer}</pre>
+                </article>
+              ) : (
+                <p className="empty-state">No AI analysis has been run yet.</p>
+              )}
+            </article>
+          </section>
+        ) : null}
+
+        {activeTab === 'data' ? (
+          <section className="dashboard-grid">
+            <article className="panel">
+              <SectionHeader
+                eyebrow="Export coverage"
+                subtitle="Supported text-based export areas currently recognized by the parser."
+                title="Categories"
+              />
+              <div className="hero-pills">
+                {SUPPORTED_EXPORT_AREAS.map((label) => (
+                  <span className="outline-pill" key={label}>
+                    {label}
+                  </span>
+                ))}
+              </div>
+              <div className="subpanel">
+                <h3>Warnings</h3>
+                <div className="stack-list compact-stack">
+                  {workspace.warnings.map((warning) => (
+                    <article className="list-card" key={warning}>
+                      <p>{warning}</p>
+                    </article>
+                  ))}
+                  {workspace.warnings.length === 0 ? <p className="empty-state">No parser warnings.</p> : null}
+                </div>
+              </div>
+            </article>
+
+            <article className="panel">
+              <SectionHeader
+                eyebrow="Files"
+                subtitle="Every file is clickable so you can inspect the normalized rows recovered from it."
+                title="Source files"
+              />
+              <div className="stack-list scroll-stack medium-scroll">
+                {workspace.fileSummaries.map((file) => (
+                  <button
+                    className="list-button"
+                    key={`${file.uploadId}-${file.path}`}
+                    onClick={() => setModalState({ type: 'file', path: file.path, uploadId: file.uploadId })}
+                    type="button"
+                  >
+                    <div className="list-head">
+                      <strong>{file.path}</strong>
+                      <span>{file.rows} rows</span>
+                    </div>
+                    <p>
+                      {file.category} / {file.supported ? 'supported' : 'skipped'}
+                    </p>
+                  </button>
+                ))}
+              </div>
+            </article>
+          </section>
+        ) : null}
+      </main>
+      {renderModal()}
+    </>
   )
 }

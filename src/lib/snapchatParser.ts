@@ -67,6 +67,13 @@ function detectCategory(path: string, records: FlatRecord[]): DataCategory {
   }
 
   if (
+    lower.includes('bitmoji') ||
+    keys.some((key) => key.includes('bitmoji'))
+  ) {
+    return 'bitmoji'
+  }
+
+  if (
     lower.includes('chat') ||
     lower.includes('conversation') ||
     lower.includes('message') ||
@@ -78,11 +85,26 @@ function detectCategory(path: string, records: FlatRecord[]): DataCategory {
   }
 
   if (
+    lower.includes('support') ||
+    keys.some((key) => ['ticket', 'support_case', 'support'].some((needle) => key.includes(needle)))
+  ) {
+    return 'support'
+  }
+
+  if (
     lower.includes('friend') ||
     lower.includes('friends') ||
     keys.some((key) => key.includes('friend'))
   ) {
     return 'friend'
+  }
+
+  if (
+    lower.includes('purchase') ||
+    lower.includes('shop') ||
+    keys.some((key) => ['purchase', 'order', 'item'].some((needle) => key.includes(needle)))
+  ) {
+    return 'purchase'
   }
 
   if (
@@ -319,7 +341,7 @@ function normalizeTimestamp(value: string | null) {
 
 function deriveSubtype(record: FlatRecord) {
   return (
-    pickString(record, ['status', 'type', 'action', 'category']) ??
+    pickString(record, ['status', 'type', 'action', 'category', 'event']) ??
     pickString(record, ['query', 'message', 'device']) ??
     null
   )
@@ -328,8 +350,57 @@ function deriveSubtype(record: FlatRecord) {
 function eventEvidenceText(record: FlatRecord) {
   return Object.values(record)
     .filter((value) => typeof value === 'string' || typeof value === 'number')
-    .slice(0, 8)
+    .slice(0, 12)
     .join(' ')
+}
+
+function pickContact(record: FlatRecord, category: DataCategory, path: string) {
+  const direct =
+    pickString(record, [
+      'friend',
+      'contact',
+      'display_name',
+      'participant',
+      'recipient',
+      'sender',
+      'from',
+      'to',
+      'conversation_title',
+      'display',
+      'friend_name',
+      'recipient_name',
+    ]) ??
+    pickString(record, ['username', 'user', 'handle'])
+
+  if (direct) {
+    return direct
+  }
+
+  if (category === 'chat' || category === 'friend' || category === 'search') {
+    return (
+      pickString(record, ['name', 'conversation', 'title']) ??
+      derivePathContact(path)
+    )
+  }
+
+  return null
+}
+
+function pickEventText(record: FlatRecord) {
+  return pickString(record, [
+    'message',
+    'chat',
+    'content',
+    'body',
+    'text',
+    'caption',
+    'savedchat',
+    'snap_caption',
+    'line',
+    'description',
+    'title',
+    'note',
+  ])
 }
 
 function normalizeEvent(
@@ -348,35 +419,10 @@ function normalizeEvent(
     timestamp: normalizeTimestamp(
       pickString(record, ['timestamp', 'created', 'saved', 'sent', 'date', 'time']),
     ),
-    contact:
-      pickString(record, [
-        'friend',
-        'contact',
-        'display_name',
-        'participant',
-        'recipient',
-        'sender',
-        'from',
-        'to',
-        'conversation_title',
-        'display',
-      ]) ??
-      pickString(record, ['username', 'user', 'handle']) ??
-      (category === 'chat' ? derivePathContact(path) : null) ??
-      null,
-    text: pickString(record, [
-      'message',
-      'chat',
-      'content',
-      'body',
-      'text',
-      'caption',
-      'savedchat',
-      'snap_caption',
-      'line',
-    ]),
+    contact: pickContact(record, category, path),
+    text: pickEventText(record),
     detail:
-      pickString(record, ['query', 'filename', 'email', 'ip', 'status', 'device']) ?? null,
+      pickString(record, ['query', 'filename', 'email', 'ip', 'status', 'device', 'action']) ?? null,
     locationName: pickString(record, ['location', 'place', 'city', 'address']),
     latitude: pickNumber(record, ['latitude', 'lat']),
     longitude: pickNumber(record, ['longitude', 'lng', 'lon']),
