@@ -67,6 +67,8 @@ const HTML_NOISE_TERMS = new Set([
   'support history',
   'user & public profiles',
 ])
+const SNAPCHAT_TRANSCRIPT_PATTERN =
+  /(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC)(Saved|Opened|Received|Delivered|Sent)?([A-Za-z0-9._-]{2,40})?(TEXT|MEDIA|CALL|NOTE)?/g
 
 function slugify(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, '-')
@@ -213,6 +215,45 @@ function buildHtmlLineRecords(content: string) {
     }
 
     records.push(record)
+  })
+
+  return records
+}
+
+function extractTranscriptRecords(content: string) {
+  const matches = [...content.matchAll(SNAPCHAT_TRANSCRIPT_PATTERN)]
+  if (matches.length < 2 && !content.includes('TEXT')) {
+    return []
+  }
+
+  const records: FlatRecord[] = []
+
+  matches.forEach((match, index) => {
+    const fullMatch = match[0]
+    const start = match.index ?? 0
+    const nextStart = matches[index + 1]?.index ?? content.length
+    const timestamp = match[1]?.trim() ?? null
+    const status = match[2]?.trim() ?? null
+    const contact = match[3]?.trim() ?? null
+    const marker = match[4]?.trim() ?? null
+
+    let message = content.slice(start + fullMatch.length, nextStart)
+    message = message
+      .replace(/^[,:;\s"'`]+/, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+
+    if (!timestamp || !contact || !message) {
+      return
+    }
+
+    records.push({
+      timestamp,
+      status: status ?? 'Saved',
+      contact,
+      marker: marker ?? 'TEXT',
+      message,
+    })
   })
 
   return records
@@ -383,6 +424,11 @@ function parseCsv(content: string): FlatRecord[] {
 }
 
 function parseHtml(content: string): FlatRecord[] {
+  const transcriptRecords = extractTranscriptRecords(content)
+  if (transcriptRecords.length > 0) {
+    return transcriptRecords
+  }
+
   const document = new DOMParser().parseFromString(content, 'text/html')
   const tables = [...document.querySelectorAll('table')]
   const tableRecords = tables.flatMap((table) => {
@@ -428,6 +474,11 @@ function parseJson(content: string): FlatRecord[] {
 }
 
 function parseTxt(content: string): FlatRecord[] {
+  const transcriptRecords = extractTranscriptRecords(content)
+  if (transcriptRecords.length > 0) {
+    return transcriptRecords
+  }
+
   return content
     .split(/\r?\n/)
     .map((line) => line.trim())
@@ -503,9 +554,12 @@ function normalizeTimestamp(value: string | null) {
 
   const extracted = extractTimestampFragment(value) ?? value
   const numeric = Number(value)
+  const normalizedText = extracted
+    .replace(' UTC', 'Z')
+    .replace(/(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})/, '$1T$2')
   const date = Number.isFinite(numeric)
     ? new Date(String(value).length >= 13 ? numeric : numeric * 1000)
-    : new Date(extracted)
+    : new Date(normalizedText)
 
   return Number.isNaN(date.getTime()) ? null : date.toISOString()
 }
