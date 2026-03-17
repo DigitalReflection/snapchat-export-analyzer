@@ -1,6 +1,6 @@
 # Snapchat Export Analyzer
 
-A privacy-first web dashboard for reviewing Snapchat exports that an account owner willingly provides. The MVP is designed to run mostly in the browser so the app stays cheap to host and avoids storing sensitive uploads on a server by default.
+A privacy-first web dashboard for reviewing communication exports that an account owner willingly provides. The app runs mostly in the browser so uploads stay local, while still supporting deeper analytics, evidence-backed summaries, and optional AI-assisted review.
 
 ## Cheap stack
 
@@ -15,13 +15,28 @@ A privacy-first web dashboard for reviewing Snapchat exports that an account own
 - Lowest cost: static hosting is usually enough for the first release
 - Easy to grow: add Cloud Run only when a browser-only workflow becomes limiting
 
-## Current MVP
+## Current capabilities
 
 1. Accept a Snapchat export zip in the browser.
-2. Parse supported JSON, CSV, HTML, and TXT files locally.
-3. Normalize useful rows into chat, contact, location, search, login, and memory events.
-4. Show signals for contact spikes, late-night activity, keyword matches, location overlap, and device changes.
-5. Export normalized events as JSON plus contacts and keyword hits as CSV.
+2. Parse supported JSON, CSV, HTML, and TXT files locally with upload/file provenance.
+3. Normalize useful rows into account, chat, contact, location, search, login, and memory events.
+4. Build deterministic analytics for timelines, frequency shifts, recurring entities, repeated phrases, tone categories, notable periods, and evidence-backed signals.
+5. Support multiple uploads in one workspace to enable cross-upload comparison.
+6. Export normalized events, contacts, keyword matches, and a structured workspace report.
+7. Run optional browser-side AI review using Gemini or OpenAI with a user-provided API key.
+
+## Dashboard sections
+
+- Executive overview
+- Upload and account overview
+- Timeline explorer
+- Hourly and weekday activity views
+- Communication patterns
+- Entity extraction
+- Repeated phrase and tone classification
+- Deterministic findings and notable periods
+- Evidence snippets
+- Optional AI review
 
 ## Snapchat export coverage
 
@@ -87,7 +102,7 @@ The repo already includes a starter [firebase.json](/C:/Users/Anon/Documents/Sna
 
 ## Next build steps
 
-- Add PDF, CSV, and JSON report export from the live dashboard
-- Add editable keyword watchlists and saved review rules
-- Add a richer timeline chart and correlation views
-- Add optional Cloud Run endpoints for generated report files or auth
+- Add downloadable PDF reports
+- Add richer filtering and saved workspaces
+- Add stronger Snapchat-specific parsers for known export file structures
+- Move optional AI requests behind a backend if you need stronger key isolation

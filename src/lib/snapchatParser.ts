@@ -1,50 +1,84 @@
 import JSZip from 'jszip'
 import Papa from 'papaparse'
-import { buildDataset } from './heuristics'
-import type { DataCategory, FileSummary, NormalizedEvent, ParsedDataset } from '../types'
+import type {
+  AccountProfile,
+  DataCategory,
+  FileSummary,
+  NormalizedEvent,
+  NormalizedValue,
+  ParsedUpload,
+  UploadSummary,
+} from '../types'
 
-type Scalar = string | number | boolean | null
-type FlatRecord = Record<string, Scalar>
+type FlatRecord = Record<string, NormalizedValue>
 
 const SUPPORTED_EXTENSIONS = ['.json', '.csv', '.html', '.htm', '.txt']
-
-function hasSupportedExtension(path: string) {
-  return SUPPORTED_EXTENSIONS.some((extension) => path.toLowerCase().endsWith(extension))
-}
+const ACCOUNT_KEYS = ['username', 'display', 'email', 'phone', 'mobile', 'profile', 'account']
 
 function slugify(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, '-')
 }
 
-function detectCategory(path: string): DataCategory {
+function extensionOf(path: string) {
+  const index = path.lastIndexOf('.')
+  return index >= 0 ? path.slice(index).toLowerCase() : ''
+}
+
+function hasSupportedExtension(path: string) {
+  return SUPPORTED_EXTENSIONS.includes(extensionOf(path))
+}
+
+function detectCategory(path: string, records: FlatRecord[]): DataCategory {
   const lower = path.toLowerCase()
+  const keys = records.slice(0, 5).flatMap((record) => Object.keys(record).map((key) => key.toLowerCase()))
+
+  if (
+    lower.includes('account') ||
+    lower.includes('profile') ||
+    keys.some((key) => ACCOUNT_KEYS.some((needle) => key.includes(needle)))
+  ) {
+    return 'account'
+  }
 
   if (
     lower.includes('chat') ||
     lower.includes('conversation') ||
     lower.includes('message') ||
-    lower.includes('snap_history')
+    keys.some((key) => ['message', 'chat', 'text', 'body'].some((needle) => key.includes(needle)))
   ) {
     return 'chat'
   }
 
-  if (lower.includes('friend')) {
+  if (lower.includes('friend') || keys.some((key) => key.includes('friend'))) {
     return 'friend'
   }
 
-  if (lower.includes('location')) {
+  if (
+    lower.includes('location') ||
+    keys.some((key) => ['location', 'latitude', 'longitude', 'address'].some((needle) => key.includes(needle)))
+  ) {
     return 'location'
   }
 
-  if (lower.includes('login') || lower.includes('device') || lower.includes('session')) {
+  if (
+    lower.includes('login') ||
+    lower.includes('device') ||
+    lower.includes('session') ||
+    keys.some((key) => ['device', 'session', 'ip', 'login'].some((needle) => key.includes(needle)))
+  ) {
     return 'login'
   }
 
-  if (lower.includes('memories') || lower.includes('memory') || lower.includes('media')) {
+  if (
+    lower.includes('memories') ||
+    lower.includes('memory') ||
+    lower.includes('media') ||
+    keys.some((key) => ['filename', 'media'].some((needle) => key.includes(needle)))
+  ) {
     return 'memory'
   }
 
-  if (lower.includes('search')) {
+  if (lower.includes('search') || keys.some((key) => key.includes('query'))) {
     return 'search'
   }
 
@@ -71,8 +105,26 @@ function flattenObject(value: unknown, prefix = '', target: FlatRecord = {}): Fl
     return target
   }
 
-  target[prefix] = typeof value === 'boolean' ? String(value) : (value as Scalar)
+  target[prefix] = value as NormalizedValue
   return target
+}
+
+function looksLikeRecord(value: unknown) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false
+  }
+
+  const flattened = flattenObject(value)
+  const keys = Object.keys(flattened)
+  if (keys.length < 2) {
+    return false
+  }
+
+  return keys.some((key) =>
+    ['time', 'date', 'message', 'user', 'friend', 'query', 'location', 'device'].some((needle) =>
+      key.toLowerCase().includes(needle),
+    ),
+  )
 }
 
 function collectRecords(value: unknown): FlatRecord[] {
@@ -84,16 +136,11 @@ function collectRecords(value: unknown): FlatRecord[] {
     return []
   }
 
-  const direct = flattenObject(value)
-  const nested = Object.values(value as Record<string, unknown>).flatMap((item) =>
-    collectRecords(item),
-  )
-
-  if (Object.keys(direct).length === 0) {
-    return nested
+  if (looksLikeRecord(value)) {
+    return [flattenObject(value)]
   }
 
-  return [direct, ...nested]
+  return Object.values(value as Record<string, unknown>).flatMap((item) => collectRecords(item))
 }
 
 function parseCsv(content: string): FlatRecord[] {
@@ -102,12 +149,9 @@ function parseCsv(content: string): FlatRecord[] {
     skipEmptyLines: true,
   })
 
-  return (parsed.data ?? []).map((record: Record<string, string>) =>
+  return (parsed.data ?? []).map((record) =>
     Object.fromEntries(
-      Object.entries(record).map(([key, value]) => [
-        key,
-        typeof value === 'string' ? value.trim() : null,
-      ]),
+      Object.entries(record).map(([key, value]) => [key, value ? value.trim() : null]),
     ),
   )
 }
@@ -127,26 +171,27 @@ function parseHtml(content: string): FlatRecord[] {
         cell.textContent?.trim() || `column_${index + 1}`,
       )
 
-      return rows.slice(1).map((row) => {
-        const cells = [...row.querySelectorAll('td,th')]
-        return Object.fromEntries(
-          headers.map((header, index) => [header, cells[index]?.textContent?.trim() || null]),
-        )
-      })
+      return rows.slice(1).map((row) =>
+        Object.fromEntries(
+          headers.map((header, index) => [
+            header,
+            row.querySelectorAll('td,th')[index]?.textContent?.trim() || null,
+          ]),
+        ),
+      )
     })
   }
 
-  return [...document.querySelectorAll('li')]
-    .slice(0, 500)
-    .map((item, index) => ({
-      [`line_${index + 1}`]: item.textContent?.trim() || null,
+  return [...document.querySelectorAll('li,p')]
+    .map((node, index) => ({
+      [`line_${index + 1}`]: node.textContent?.trim() || null,
     }))
+    .filter((record) => Object.values(record)[0])
 }
 
 function parseJson(content: string): FlatRecord[] {
   try {
-    const parsed = JSON.parse(content)
-    return collectRecords(parsed)
+    return collectRecords(JSON.parse(content))
   } catch {
     return []
   }
@@ -163,18 +208,16 @@ function parseTxt(content: string): FlatRecord[] {
     }))
 }
 
-function parseByExtension(path: string, content: string): FlatRecord[] {
-  const lower = path.toLowerCase()
+function parseByExtension(path: string, content: string) {
+  const extension = extensionOf(path)
 
-  if (lower.endsWith('.json')) {
+  if (extension === '.json') {
     return parseJson(content)
   }
-
-  if (lower.endsWith('.csv')) {
+  if (extension === '.csv') {
     return parseCsv(content)
   }
-
-  if (lower.endsWith('.html') || lower.endsWith('.htm')) {
+  if (extension === '.html' || extension === '.htm') {
     return parseHtml(content)
   }
 
@@ -183,11 +226,11 @@ function parseByExtension(path: string, content: string): FlatRecord[] {
 
 function pickString(record: FlatRecord, needles: string[]) {
   const entry = Object.entries(record).find(([key, value]) => {
-    const lowerKey = key.toLowerCase()
-    return needles.some((needle) => lowerKey.includes(needle)) && value
+    const lower = key.toLowerCase()
+    return needles.some((needle) => lower.includes(needle)) && value !== null && value !== ''
   })
 
-  return entry?.[1] ? String(entry[1]) : null
+  return entry?.[1] !== undefined && entry[1] !== null ? String(entry[1]) : null
 }
 
 function pickNumber(record: FlatRecord, needles: string[]) {
@@ -196,8 +239,8 @@ function pickNumber(record: FlatRecord, needles: string[]) {
     return null
   }
 
-  const numeric = Number(value)
-  return Number.isFinite(numeric) ? numeric : null
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : null
 }
 
 function normalizeTimestamp(value: string | null) {
@@ -205,97 +248,197 @@ function normalizeTimestamp(value: string | null) {
     return null
   }
 
-  const asNumber = Number(value)
-  const date = Number.isFinite(asNumber) && value.length >= 10
-    ? new Date(value.length > 10 ? asNumber : asNumber * 1000)
+  const numeric = Number(value)
+  const date = Number.isFinite(numeric)
+    ? new Date(value.length >= 13 ? numeric : numeric * 1000)
     : new Date(value)
 
   return Number.isNaN(date.getTime()) ? null : date.toISOString()
 }
 
-function toEvent(path: string, category: DataCategory, record: FlatRecord, index: number) {
-  const contact =
-    pickString(record, ['friend', 'contact', 'username', 'participant', 'recipient']) ??
+function deriveSubtype(record: FlatRecord) {
+  return (
+    pickString(record, ['status', 'type', 'action', 'category']) ??
+    pickString(record, ['query', 'message', 'device']) ??
     null
-  const text = pickString(record, ['message', 'chat', 'content', 'body', 'text'])
-  const detail =
-    pickString(record, ['query', 'search', 'status', 'action', 'type', 'filename']) ?? null
+  )
+}
 
+function eventEvidenceText(record: FlatRecord) {
+  return Object.values(record)
+    .filter((value) => typeof value === 'string' || typeof value === 'number')
+    .slice(0, 8)
+    .join(' ')
+}
+
+function normalizeEvent(
+  uploadId: string,
+  path: string,
+  category: DataCategory,
+  record: FlatRecord,
+  index: number,
+) {
   const event: NormalizedEvent = {
-    id: `${slugify(path)}-${index}`,
+    id: `${uploadId}:${slugify(path)}:${index}`,
+    uploadId,
     category,
+    subtype: deriveSubtype(record),
     sourceFile: path,
     timestamp: normalizeTimestamp(
-      pickString(record, ['timestamp', 'created', 'date', 'time', 'sent', 'saved']),
+      pickString(record, ['timestamp', 'created', 'saved', 'sent', 'date', 'time']),
     ),
-    contact,
-    text,
-    detail,
+    contact:
+      pickString(record, ['friend', 'contact', 'display_name', 'participant', 'recipient']) ??
+      pickString(record, ['username', 'user']) ??
+      null,
+    text: pickString(record, ['message', 'chat', 'content', 'body', 'text']),
+    detail:
+      pickString(record, ['query', 'filename', 'email', 'ip', 'status', 'device']) ?? null,
     locationName: pickString(record, ['location', 'place', 'city', 'address']),
-    latitude: pickNumber(record, ['lat']),
-    longitude: pickNumber(record, ['lon', 'lng']),
+    latitude: pickNumber(record, ['latitude', 'lat']),
+    longitude: pickNumber(record, ['longitude', 'lng', 'lon']),
     device: pickString(record, ['device', 'model', 'platform']),
-    region: pickString(record, ['region', 'country', 'ip']),
+    region: pickString(record, ['region', 'country', 'state', 'ip']),
+    evidenceText: eventEvidenceText(record),
+    attributes: record,
   }
 
   return event
 }
 
-function normalizeEvents(path: string, category: DataCategory, records: FlatRecord[]) {
-  return records
-    .map((record, index) => toEvent(path, category, record, index))
-    .filter((event) => {
-      if (category === 'unknown') {
-        return Boolean(event.timestamp || event.contact || event.text || event.detail)
-      }
-
-      return true
-    })
+function buildEmptyAccount(): AccountProfile {
+  return {
+    username: null,
+    displayName: null,
+    email: null,
+    phone: null,
+    region: null,
+    aliases: [],
+  }
 }
 
-export async function parseSnapchatZip(file: File): Promise<ParsedDataset> {
+function enrichAccount(account: AccountProfile, record: FlatRecord) {
+  const next = { ...account }
+  next.username =
+    next.username ??
+    pickString(record, ['username', 'user_name', 'user']) ??
+    null
+  next.displayName =
+    next.displayName ??
+    pickString(record, ['display_name', 'display', 'name']) ??
+    null
+  next.email = next.email ?? pickString(record, ['email']) ?? null
+  next.phone = next.phone ?? pickString(record, ['phone', 'mobile']) ?? null
+  next.region = next.region ?? pickString(record, ['region', 'country', 'state']) ?? null
+
+  ;[next.username, next.displayName, next.email, next.phone]
+    .filter((value): value is string => Boolean(value))
+    .forEach((value) => {
+      if (!next.aliases.includes(value)) {
+        next.aliases.push(value)
+      }
+    })
+
+  return next
+}
+
+export async function parseSnapchatZip(file: File): Promise<ParsedUpload> {
+  const uploadId = slugify(`${file.name}-${file.lastModified}`)
   const zip = await JSZip.loadAsync(file)
   const events: NormalizedEvent[] = []
   const fileSummaries: FileSummary[] = []
+  const warnings: string[] = []
+  let account = buildEmptyAccount()
 
-  const entries = Object.values(zip.files).filter(
-    (entry) => !entry.dir && hasSupportedExtension(entry.name),
-  )
+  const allEntries = Object.values(zip.files).filter((entry) => !entry.dir)
+  const supportedEntries = allEntries.filter((entry) => hasSupportedExtension(entry.name))
 
-  await Promise.all(
-    entries.map(async (entry) => {
+  for (const entry of supportedEntries) {
+    try {
       const content = await entry.async('text')
-      const category = detectCategory(entry.name)
       const records = parseByExtension(entry.name, content)
-      const normalized = normalizeEvents(entry.name, category, records)
+      const category = detectCategory(entry.name, records)
+      const normalized = records
+        .map((record, index) => normalizeEvent(uploadId, entry.name, category, record, index))
+        .filter((event) => {
+          if (category === 'unknown') {
+            return Boolean(
+              event.timestamp ||
+                event.contact ||
+                event.text ||
+                event.detail ||
+                event.locationName,
+            )
+          }
+
+          return true
+        })
+
+      if (category === 'account') {
+        records.forEach((record) => {
+          account = enrichAccount(account, record)
+        })
+      }
 
       events.push(...normalized)
       fileSummaries.push({
+        uploadId,
         path: entry.name,
+        extension: extensionOf(entry.name),
         category,
         rows: normalized.length,
+        supported: true,
       })
-    }),
-  )
+    } catch (error) {
+      warnings.push(
+        `Could not parse ${entry.name}: ${error instanceof Error ? error.message : 'unknown error'}`,
+      )
+    }
+  }
 
-  const dataset = buildDataset(
-    events
-      .sort((left, right) => {
-        if (!left.timestamp) {
-          return 1
-        }
-
-        if (!right.timestamp) {
-          return -1
-        }
-
-        return left.timestamp.localeCompare(right.timestamp)
+  allEntries
+    .filter((entry) => !hasSupportedExtension(entry.name))
+    .forEach((entry) => {
+      fileSummaries.push({
+        uploadId,
+        path: entry.name,
+        extension: extensionOf(entry.name),
+        category: 'unknown',
+        rows: 0,
+        supported: false,
       })
-      .slice(-3000),
-  )
+    })
+
+  const categoryCounts = events.reduce<Partial<Record<DataCategory, number>>>((counts, event) => {
+    counts[event.category] = (counts[event.category] ?? 0) + 1
+    return counts
+  }, {})
+
+  const upload: UploadSummary = {
+    id: uploadId,
+    fileName: file.name,
+    sizeBytes: file.size,
+    uploadedAt: new Date(file.lastModified || Date.now()).toISOString(),
+    processedAt: new Date().toISOString(),
+    totalFiles: allEntries.length,
+    supportedFiles: supportedEntries.length,
+    unsupportedFiles: allEntries.length - supportedEntries.length,
+    categoryCounts,
+    account,
+    warnings,
+  }
 
   return {
-    ...dataset,
+    upload,
     fileSummaries: fileSummaries.sort((left, right) => right.rows - left.rows),
+    events: events.sort((left, right) => {
+      if (!left.timestamp) {
+        return 1
+      }
+      if (!right.timestamp) {
+        return -1
+      }
+      return left.timestamp.localeCompare(right.timestamp)
+    }),
   }
 }

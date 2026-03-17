@@ -1,4 +1,10 @@
-import type { ContactSummary, KeywordHit, NormalizedEvent } from '../types'
+import type {
+  ContactSummary,
+  KeywordHit,
+  NormalizedEvent,
+  WorkspaceDataset,
+} from '../types'
+import { buildWorkspaceReport } from './insights'
 
 function toCsv(rows: Record<string, string | number | null>[]) {
   if (rows.length === 0) {
@@ -12,7 +18,10 @@ function toCsv(rows: Record<string, string | number | null>[]) {
     return /[",\n]/.test(escaped) ? `"${escaped}"` : escaped
   }
 
-  return [headers.join(','), ...rows.map((row) => headers.map((header) => escape(row[header])).join(','))].join('\n')
+  return [
+    headers.join(','),
+    ...rows.map((row) => headers.map((header) => escape(row[header])).join(',')),
+  ].join('\n')
 }
 
 function download(filename: string, content: string, type: string) {
@@ -27,7 +36,7 @@ function download(filename: string, content: string, type: string) {
 
 export function downloadEventsJson(events: NormalizedEvent[]) {
   download(
-    'snapchat-events.json',
+    'communication-events.json',
     JSON.stringify(events, null, 2),
     'application/json;charset=utf-8',
   )
@@ -35,10 +44,11 @@ export function downloadEventsJson(events: NormalizedEvent[]) {
 
 export function downloadKeywordHitsCsv(keywordHits: KeywordHit[]) {
   download(
-    'snapchat-keyword-hits.csv',
+    'keyword-hits.csv',
     toCsv(
       keywordHits.map((hit) => ({
         phrase: hit.phrase,
+        category: hit.category,
         contact: hit.contact,
         timestamp: hit.timestamp,
         excerpt: hit.excerpt,
@@ -50,17 +60,30 @@ export function downloadKeywordHitsCsv(keywordHits: KeywordHit[]) {
 
 export function downloadContactsCsv(contacts: ContactSummary[]) {
   download(
-    'snapchat-contacts.csv',
+    'contacts.csv',
     toCsv(
       contacts.map((contact) => ({
         name: contact.name,
         interactions: contact.interactions,
-        firstSeen: contact.firstSeen,
-        lastSeen: contact.lastSeen,
+        messageCount: contact.messageCount,
+        searchCount: contact.searchCount,
         lateNightInteractions: contact.lateNightInteractions,
         keywordHits: contact.keywordHits,
+        uploads: contact.uploads,
+        activeDays: contact.activeDays,
+        recentChange: contact.recentChange,
+        firstSeen: contact.firstSeen,
+        lastSeen: contact.lastSeen,
       })),
     ),
     'text/csv;charset=utf-8',
+  )
+}
+
+export function downloadWorkspaceReport(workspace: WorkspaceDataset) {
+  download(
+    'workspace-report.json',
+    JSON.stringify(buildWorkspaceReport(workspace), null, 2),
+    'application/json;charset=utf-8',
   )
 }
