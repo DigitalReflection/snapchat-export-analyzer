@@ -17,6 +17,7 @@ import type {
   FileSummary,
   NormalizedEvent,
   UploadSummary,
+  WorkspaceDataset,
 } from './types'
 import { runAIReview } from './lib/ai'
 import {
@@ -93,6 +94,8 @@ const TAB_LABELS: Array<{ id: ActiveTab; label: string }> = [
   { id: 'data', label: 'Data' },
 ]
 const MEDIA_DETAIL_PATTERN = /\.(?:jpe?g|png|gif|heic|mp4|mov|webm|avi|mkv)$/i
+const THREAD_PAGE_SIZE = 200
+const LARGE_EXPORT_THRESHOLD = 4000
 
 type ContactDateMarker = {
   label: string
@@ -499,8 +502,11 @@ function DetailModal(props: {
 
 export default function App() {
   const [uploads, setUploads] = useState([sampleUpload])
+  const [workspace, setWorkspace] = useState<WorkspaceDataset>(() => buildWorkspace([sampleUpload]))
   const [status, setStatus] = useState('Demo workspace loaded. Upload a zip or extracted export folder.')
   const [error, setError] = useState<string | null>(null)
+  const [workspaceError, setWorkspaceError] = useState<string | null>(null)
+  const [isWorkspaceLoading, setIsWorkspaceLoading] = useState(false)
   const [isLoadingZip, setIsLoadingZip] = useState(false)
   const [isLoadingFolder, setIsLoadingFolder] = useState(false)
   const [activeTab, setActiveTab] = useState<ActiveTab>('overview')
@@ -513,6 +519,8 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('delete this, Jordan, address')
   const [threadMode, setThreadMode] = useState<ThreadMode>('chat')
   const [threadSearch, setThreadSearch] = useState('')
+  const [selectedThreadLimit, setSelectedThreadLimit] = useState(THREAD_PAGE_SIZE)
+  const [modalThreadLimit, setModalThreadLimit] = useState(THREAD_PAGE_SIZE)
   const [modalState, setModalState] = useState<ModalState>(null)
   const [aiSettings, setAiSettings] = useState<AISettings>({
     provider: 'gemini',
@@ -526,6 +534,8 @@ export default function App() {
   const [aiError, setAiError] = useState<string | null>(null)
   const [isAiLoading, setIsAiLoading] = useState(false)
   const folderInputRef = useRef<HTMLInputElement>(null)
+  const workspaceWorkerRef = useRef<Worker | null>(null)
+  const workspaceRequestRef = useRef(0)
 
   const deferredContactSearch = useDeferredValue(contactSearch)
   const deferredSearchQuery = useDeferredValue(searchQuery)
@@ -553,6 +563,18 @@ export default function App() {
     }
   }, [])
 
+  useEffect(() => {
+    const worker = new Worker(new URL('./lib/workspaceWorker.ts', import.meta.url), {
+      type: 'module',
+    })
+    workspaceWorkerRef.current = worker
+
+    return () => {
+      worker.terminate()
+      workspaceWorkerRef.current = null
+    }
+  }, [])
+
   useEffect(() => window.localStorage.setItem(NOTES_KEY, notes), [notes])
   useEffect(
     () => window.localStorage.setItem(CONTACT_LABELS_KEY, JSON.stringify(contactLabels)),
@@ -562,6 +584,45 @@ export default function App() {
     () => window.sessionStorage.setItem(AI_SETTINGS_KEY, JSON.stringify(aiSettings)),
     [aiSettings],
   )
+  useEffect(() => {
+    const worker = workspaceWorkerRef.current
+    if (!worker) {
+      setWorkspace(buildWorkspace(uploads))
+      return
+    }
+
+    const requestId = `workspace-${Date.now()}-${workspaceRequestRef.current + 1}`
+    workspaceRequestRef.current += 1
+    setIsWorkspaceLoading(true)
+    setWorkspaceError(null)
+
+    const handleMessage = (
+      event: MessageEvent<{ requestId: string; workspace?: WorkspaceDataset; error?: string }>,
+    ) => {
+      if (event.data.requestId !== requestId) {
+        return
+      }
+
+      worker.removeEventListener('message', handleMessage as EventListener)
+      setIsWorkspaceLoading(false)
+
+      if (event.data.error) {
+        setWorkspaceError(event.data.error)
+        return
+      }
+
+      if (event.data.workspace) {
+        setWorkspace(event.data.workspace)
+      }
+    }
+
+    worker.addEventListener('message', handleMessage as EventListener)
+    worker.postMessage({ requestId, uploads })
+
+    return () => {
+      worker.removeEventListener('message', handleMessage as EventListener)
+    }
+  }, [uploads])
   useEffect(() => {
     if (!modalState) return
 
@@ -574,8 +635,6 @@ export default function App() {
     window.addEventListener('keydown', handleEscape)
     return () => window.removeEventListener('keydown', handleEscape)
   }, [modalState])
-
-  const workspace = useMemo(() => buildWorkspace(uploads), [uploads])
   const eventsById = useMemo(
     () => new Map(workspace.events.map((event) => [event.id, event])),
     [workspace.events],
@@ -623,6 +682,12 @@ export default function App() {
       setSelectedContact(workspace.contacts[0].name)
     }
   }, [selectedContact, workspace.contacts])
+  useEffect(() => {
+    setSelectedThreadLimit(THREAD_PAGE_SIZE)
+  }, [selectedContact, threadMode])
+  useEffect(() => {
+    setModalThreadLimit(THREAD_PAGE_SIZE)
+  }, [modalState, threadMode])
 
   const filteredContacts = useMemo(() => {
     const needle = deferredContactSearch.trim().toLowerCase()
@@ -664,6 +729,10 @@ export default function App() {
   const selectedThreadTerms = useMemo(
     () => queryTermsFromInput(deferredThreadSearch),
     [deferredThreadSearch],
+  )
+  const selectedVisibleThreadPage = useMemo(
+    () => selectedVisibleThread.slice(0, selectedThreadLimit),
+    [selectedThreadLimit, selectedVisibleThread],
   )
 
   const selectedDateMarkers = useMemo(() => buildDateMarkers(selectedThread), [selectedThread])
@@ -732,6 +801,7 @@ export default function App() {
     }),
     [contactLabels, workspace.contacts],
   )
+  const requiresAiForDeepReview = workspace.stats.totalEvents >= LARGE_EXPORT_THRESHOLD
 
   function mergeUploads(nextUploads: typeof uploads) {
     setUploads((current) => {
@@ -1045,6 +1115,7 @@ export default function App() {
         ).toLowerCase()
         return modalTerms.some((term) => haystack.includes(term))
       })
+      const visibleThreadPage = visibleThread.slice(0, modalThreadLimit)
       const contactEntities = workspace.entities
         .filter((entity) => entity.contacts.includes(summary.name))
         .slice(0, 12)
@@ -1194,12 +1265,21 @@ export default function App() {
               <div className="thread-scroll">
                 <ConversationList
                   aliasIndex={aliasIndex}
-                  events={visibleThread}
+                  events={visibleThreadPage}
                   onEventClick={(eventId) => setModalState({ type: 'event', eventId })}
                   terms={modalTerms}
                 />
                 {visibleThread.length === 0 ? (
                   <p className="empty-state">No rows matched the current thread filter.</p>
+                ) : null}
+                {visibleThread.length > visibleThreadPage.length ? (
+                  <button
+                    className="secondary-button load-more-button"
+                    onClick={() => setModalThreadLimit((current) => current + THREAD_PAGE_SIZE)}
+                    type="button"
+                  >
+                    Load {Math.min(THREAD_PAGE_SIZE, visibleThread.length - visibleThreadPage.length)} more rows
+                  </button>
                 ) : null}
               </div>
             </section>
@@ -1451,6 +1531,13 @@ export default function App() {
           <div>
             <p>{status}</p>
             {error ? <p className="error-line">{error}</p> : null}
+            {workspaceError ? <p className="error-line">{workspaceError}</p> : null}
+            {isWorkspaceLoading ? <p className="loading-line">Organizing export in the background...</p> : null}
+            {requiresAiForDeepReview && !aiSettings.apiKey.trim() ? (
+              <p className="loading-line">
+                Large export detected. Paste an API key below to enable deep AI review while the deterministic view stays lightweight.
+              </p>
+            ) : null}
           </div>
           <div className="button-row">
             <button className="chip-button" onClick={() => downloadEventsJson(workspace.events)} type="button">
@@ -1464,6 +1551,61 @@ export default function App() {
             </button>
             <button className="chip-button" onClick={() => downloadWorkspaceReport(workspace)} type="button">
               Report JSON
+            </button>
+          </div>
+        </section>
+
+        <section className="top-ai-panel">
+          <div className="top-ai-copy">
+            <p className="eyebrow">AI quick setup</p>
+            <h2>Paste your key once</h2>
+            <p className="section-copy">
+              Use AI for deeper review, summaries, entity cleanup, and large-export triage. The dashboard still works without it.
+            </p>
+          </div>
+          <div className="top-ai-controls">
+            <label className="search-field">
+              <span>Provider</span>
+              <select
+                onChange={(event) =>
+                  setAiSettings((current) => ({
+                    ...current,
+                    provider: event.target.value as AIProvider,
+                    model:
+                      current.provider === event.target.value
+                        ? current.model
+                        : DEFAULT_MODELS[event.target.value as AIProvider],
+                  }))
+                }
+                value={aiSettings.provider}
+              >
+                <option value="gemini">Gemini</option>
+                <option value="openai">OpenAI</option>
+              </select>
+            </label>
+            <label className="search-field">
+              <span>Model</span>
+              <input
+                onChange={(event) =>
+                  setAiSettings((current) => ({ ...current, model: event.target.value }))
+                }
+                type="text"
+                value={aiSettings.model}
+              />
+            </label>
+            <label className="search-field top-ai-key">
+              <span>API key</span>
+              <input
+                onChange={(event) =>
+                  setAiSettings((current) => ({ ...current, apiKey: event.target.value }))
+                }
+                placeholder="Paste API key"
+                type="password"
+                value={aiSettings.apiKey}
+              />
+            </label>
+            <button className="primary-button" onClick={handleAiRun} type="button">
+              {isAiLoading ? 'Running AI...' : 'Run AI review'}
             </button>
           </div>
         </section>
@@ -1775,12 +1917,21 @@ export default function App() {
                     <div className="thread-scroll main-thread-scroll">
                       <ConversationList
                         aliasIndex={aliasIndex}
-                        events={selectedVisibleThread}
+                        events={selectedVisibleThreadPage}
                         onEventClick={(eventId) => setModalState({ type: 'event', eventId })}
                         terms={selectedThreadTerms}
                       />
                       {selectedVisibleThread.length === 0 ? (
                         <p className="empty-state">No parsed rows matched this thread view.</p>
+                      ) : null}
+                      {selectedVisibleThread.length > selectedVisibleThreadPage.length ? (
+                        <button
+                          className="secondary-button load-more-button"
+                          onClick={() => setSelectedThreadLimit((current) => current + THREAD_PAGE_SIZE)}
+                          type="button"
+                        >
+                          Load {Math.min(THREAD_PAGE_SIZE, selectedVisibleThread.length - selectedVisibleThreadPage.length)} more rows
+                        </button>
                       ) : null}
                     </div>
                   </article>
