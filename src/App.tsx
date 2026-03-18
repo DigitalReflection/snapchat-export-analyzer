@@ -173,6 +173,22 @@ function clampPercent(value: number) {
   return Math.max(0, Math.min(100, value))
 }
 
+function yearFromTimestamp(value: string | null) {
+  if (!value) return null
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? null : date.getUTCFullYear()
+}
+
+function yearLabel(value: number | 'all' | null) {
+  return value === null || value === 'all' ? 'All years' : String(value)
+}
+
+function uniqueYears(events: NormalizedEvent[]) {
+  return [...new Set(events.map((event) => yearFromTimestamp(event.timestamp)).filter((value): value is number => value !== null))].sort(
+    (left, right) => right - left,
+  )
+}
+
 function isParsedUploadLike(value: unknown): value is ParsedUpload {
   if (!value || typeof value !== 'object') return false
   const candidate = value as ParsedUpload
@@ -278,21 +294,15 @@ function formatPlainConversationText(value: string | null | undefined) {
   const looksStructured =
     (/^[[{]/.test(normalized) && /[:",]/.test(normalized)) ||
     /"[\w.-]+"\s*:/.test(normalized) ||
-    /\b(function|const|let|var|return|document\.|window\.|querySelector)\b/.test(normalized)
+    /\b(function|const|let|var|return|document\.|window\.|querySelector|className|style=|svg|div|span|button)\b/.test(normalized) ||
+    /<\/?[a-z][^>]*>/i.test(decoded) ||
+    /[<>]{2,}/.test(decoded)
 
   if (looksStructured) {
-    try {
-      const parsed = JSON.parse(normalized) as Record<string, unknown>
-      const candidate = ['message', 'text', 'body', 'content', 'caption', 'savedchat']
-        .map((key) => parsed[key])
-        .find((entry) => typeof entry === 'string' && entry.trim())
+    return ''
+  }
 
-      if (typeof candidate === 'string') {
-        return preserveBodyText(candidate)
-      }
-    } catch {
-      return ''
-    }
+  if (/^\s*<\/?[a-z][^>]*>/i.test(decoded) || /class=|style=|xmlns=|svg|path d=|button class=/i.test(decoded)) {
     return ''
   }
 
@@ -345,9 +355,12 @@ function isMediaEvent(event: NormalizedEvent) {
 }
 
 function eventSummaryText(event: NormalizedEvent) {
-  const primary = preserveBodyText(event.text)
-  if (primary) {
-    return primary
+  const candidates = [event.text, event.detail, event.evidenceText]
+  for (const candidate of candidates) {
+    const plain = formatPlainConversationText(candidate)
+    if (plain) {
+      return plain
+    }
   }
 
   const detailLines = [event.detail, event.locationName, event.device, event.region]
@@ -362,7 +375,7 @@ function eventSummaryText(event: NormalizedEvent) {
 }
 
 function eventConversationText(event: NormalizedEvent) {
-  return formatPlainConversationText(event.text)
+  return formatPlainConversationText(event.text ?? event.detail ?? event.evidenceText)
 }
 
 function sortedDatedEvents(events: NormalizedEvent[]) {
@@ -419,6 +432,44 @@ function buildDateMarkers(events: NormalizedEvent[]) {
     }
     return markers
   })
+}
+
+function buildTimelineBuckets(events: NormalizedEvent[]) {
+  const buckets = new Map<
+    string,
+    {
+      key: string
+      label: string
+      count: number
+      categories: Partial<Record<string, number>>
+      evidenceIds: string[]
+    }
+  >()
+
+  events.forEach((event) => {
+    if (!event.timestamp) {
+      return
+    }
+
+    const key = event.timestamp.slice(0, 10)
+    const current =
+      buckets.get(key) ?? {
+        key,
+        label: formatThreadDay(event.timestamp),
+        count: 0,
+        categories: {},
+        evidenceIds: [],
+      }
+
+    current.count += 1
+    current.categories[event.category] = (current.categories[event.category] ?? 0) + 1
+    if (!current.evidenceIds.includes(event.id)) {
+      current.evidenceIds.push(event.id)
+    }
+    buckets.set(key, current)
+  })
+
+  return [...buckets.values()].sort((left, right) => left.key.localeCompare(right.key))
 }
 
 function extractActorValue(event: NormalizedEvent) {
@@ -503,10 +554,15 @@ function ConversationList(props: {
                   {extractActorValue(event) ?? (role === 'self' ? 'You' : event.contact ?? 'Unknown')}
                 </span>
                 <span className="message-copy">
-                  <HighlightedText
-                    terms={props.terms}
-                    text={displayText || (props.plainTextOnly ? 'No readable chat text was recovered for this row.' : eventSummaryText(event))}
-                  />
+                  {props.plainTextOnly ? (
+                    displayText ? (
+                      <HighlightedText terms={props.terms} text={displayText} />
+                    ) : (
+                      <span className="muted-text">No readable chat text was recovered for this row.</span>
+                    )
+                  ) : (
+                    <HighlightedText terms={props.terms} text={displayText || 'No visible text for this row.'} />
+                  )}
                 </span>
               </div>
               <span className="message-source-line mono">
@@ -656,6 +712,8 @@ export default function App() {
   const [notes, setNotes] = useState('')
   const [contactSearch, setContactSearch] = useState('')
   const [contactSort, setContactSort] = useState<ContactSort>('activity')
+  const [yearFilter, setYearFilter] = useState<string>('all')
+  const [comparisonYear, setComparisonYear] = useState<string>('all')
   const [selectedContact, setSelectedContact] = useState('')
   const [contactLabels, setContactLabels] = useState<Record<string, ContactLabel>>({})
   const [contactGroupFilter, setContactGroupFilter] = useState<'all' | ContactLabel>('all')
@@ -886,6 +944,100 @@ export default function App() {
     () => new Map(workspace.contacts.map((contact) => [contact.name, contact])),
     [workspace.contacts],
   )
+  const availableYears = useMemo(() => uniqueYears(workspace.events), [workspace.events])
+  const scopedEvents = useMemo(() => {
+    if (yearFilter === 'all') return workspace.events
+    const targetYear = Number(yearFilter)
+    return workspace.events.filter((event) => yearFromTimestamp(event.timestamp) === targetYear)
+  }, [workspace.events, yearFilter])
+  const scopedEventsByContact = useMemo(() => {
+    const map = new Map<string, NormalizedEvent[]>()
+    scopedEvents.forEach((event) => {
+      if (!event.contact) return
+      const current = map.get(event.contact) ?? []
+      current.push(event)
+      map.set(event.contact, current)
+    })
+    return map
+  }, [scopedEvents])
+  const scopedContactNames = useMemo(() => [...scopedEventsByContact.keys()], [scopedEventsByContact])
+  const selectedYearValue = yearFilter === 'all' ? 'all' : Number(yearFilter)
+  const compareYearValue = comparisonYear === 'all' ? 'all' : Number(comparisonYear)
+  const contactYearHistory = useMemo(() => {
+    const map = new Map<string, number[]>()
+
+    workspace.events.forEach((event) => {
+      if (!event.contact) return
+      const year = yearFromTimestamp(event.timestamp)
+      if (year === null) return
+      const current = map.get(event.contact) ?? []
+      if (!current.includes(year)) {
+        current.push(year)
+        current.sort((left, right) => left - right)
+      }
+      map.set(event.contact, current)
+    })
+
+    return map
+  }, [workspace.events])
+  const timelineBuckets = useMemo(
+    () => (yearFilter === 'all' ? workspace.timeline : buildTimelineBuckets(scopedEvents)),
+    [scopedEvents, workspace.timeline, yearFilter],
+  )
+  const scopedContactCounts = useMemo(
+    () => new Map([...scopedEventsByContact.entries()].map(([name, events]) => [name, events.length] as const)),
+    [scopedEventsByContact],
+  )
+  const yearComparison = useMemo(() => {
+    if (selectedYearValue === 'all' || compareYearValue === 'all') {
+      return null
+    }
+
+    const selectedYear = selectedYearValue
+    const compareYear = compareYearValue
+    const selectedContacts = new Set(scopedEvents.map((event) => event.contact).filter(Boolean) as string[])
+    const compareContacts = new Set(
+      workspace.events
+        .filter((event) => yearFromTimestamp(event.timestamp) === compareYear)
+        .map((event) => event.contact)
+        .filter(Boolean) as string[],
+    )
+
+    const shared = [...selectedContacts].filter((contact) => compareContacts.has(contact))
+    const newThisYear = [...selectedContacts].filter((contact) => !compareContacts.has(contact))
+    const compareOnly = [...compareContacts].filter((contact) => !selectedContacts.has(contact))
+
+    const reappeared = newThisYear
+      .map((contact) => {
+        const years = contactYearHistory.get(contact) ?? []
+        const priorYears = years.filter((year) => year < selectedYear)
+        const lastPriorYear = priorYears[priorYears.length - 1]
+        if (lastPriorYear === undefined || selectedYear - lastPriorYear <= 1) {
+          return null
+        }
+
+        return {
+          contact,
+          gap: selectedYear - lastPriorYear,
+          previousYear: lastPriorYear,
+          years,
+          deletionIndicators: workspace.contacts.find((entry) => entry.name === contact)?.deletionIndicators ?? 0,
+        }
+      })
+      .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
+      .sort((left, right) => right.gap - left.gap)
+
+    return {
+      selectedYear,
+      compareYear,
+      selectedCount: selectedContacts.size,
+      compareCount: compareContacts.size,
+      sharedCount: shared.length,
+      newCount: newThisYear.length,
+      compareOnlyCount: compareOnly.length,
+      reappeared,
+    }
+  }, [compareYearValue, contactYearHistory, scopedEvents, selectedYearValue, workspace.contacts, workspace.events])
   const uploadIndex = useMemo(
     () => new Map(workspace.uploads.map((upload) => [upload.id, upload])),
     [workspace.uploads],
@@ -895,16 +1047,6 @@ export default function App() {
     () => new Map(workspace.signals.map((signal) => [signal.id, signal])),
     [workspace.signals],
   )
-  const eventsByContact = useMemo(() => {
-    const map = new Map<string, NormalizedEvent[]>()
-    workspace.events.forEach((event) => {
-      if (!event.contact) return
-      const current = map.get(event.contact) ?? []
-      current.push(event)
-      map.set(event.contact, current)
-    })
-    return map
-  }, [workspace.events])
   const fileSummariesByUpload = useMemo(() => {
     const map = new Map<string, FileSummary[]>()
     workspace.fileSummaries.forEach((file) => {
@@ -915,16 +1057,6 @@ export default function App() {
     return map
   }, [workspace.fileSummaries])
 
-  useEffect(() => {
-    if (!workspace.contacts.length) {
-      setSelectedContact('')
-      return
-    }
-
-    if (!workspace.contacts.some((contact) => contact.name === selectedContact)) {
-      setSelectedContact(workspace.contacts[0].name)
-    }
-  }, [selectedContact, workspace.contacts])
   useEffect(() => {
     setSelectedThreadLimit(THREAD_PAGE_SIZE)
   }, [selectedContact, threadMode])
@@ -944,13 +1076,37 @@ export default function App() {
     )
   }, [contactGroupFilter, contactLabels, contactSort, deferredContactSearch, workspace.contacts])
 
+  useEffect(() => {
+    if (!workspace.contacts.length) {
+      setSelectedContact('')
+      return
+    }
+
+    const preferred = scopedContactNames[0] ?? filteredContacts[0]?.name ?? workspace.contacts[0]?.name ?? ''
+    const selectedIsValid =
+      workspace.contacts.some((contact) => contact.name === selectedContact) &&
+      (yearFilter === 'all' || scopedEventsByContact.has(selectedContact))
+
+    if (!selectedIsValid && preferred && preferred !== selectedContact) {
+      setSelectedContact(preferred)
+    }
+  }, [filteredContacts, scopedContactNames, scopedEventsByContact, selectedContact, workspace.contacts, yearFilter])
+
   const selectedSummary =
-    contactIndex.get(selectedContact) ?? filteredContacts[0] ?? workspace.contacts[0] ?? null
+    contactIndex.get(selectedContact) ??
+    (scopedContactNames[0] ? contactIndex.get(scopedContactNames[0]) ?? null : null) ??
+    filteredContacts[0] ??
+    workspace.contacts[0] ??
+    null
 
   const selectedThread = useMemo(() => {
     if (!selectedSummary) return []
-    return eventsByContact.get(selectedSummary.name) ?? []
-  }, [eventsByContact, selectedSummary])
+    return scopedEventsByContact.get(selectedSummary.name) ?? []
+  }, [scopedEventsByContact, selectedSummary])
+  const selectedThreadMessageCount = useMemo(
+    () => selectedThread.filter((event) => event.category === 'chat').length,
+    [selectedThread],
+  )
 
   const selectedVisibleThread = useMemo(() => {
     const threadTerms = queryTermsFromInput(deferredThreadSearch)
@@ -1019,7 +1175,7 @@ export default function App() {
   const searchHits = useMemo(() => {
     if (!searchTerms.length) return []
 
-    return workspace.events
+    return scopedEvents
       .filter((event) => {
         const haystack = compact(
           [event.contact, event.text, event.detail, event.evidenceText, event.sourceFile]
@@ -1035,11 +1191,11 @@ export default function App() {
         if (left.timestamp && right.timestamp) return right.timestamp.localeCompare(left.timestamp)
         return left.id.localeCompare(right.id)
       })
-  }, [searchTerms, workspace.events])
+  }, [scopedEvents, searchTerms])
 
   const deletionEvents = useMemo(
-    () => workspace.events.filter((event) => hasDeletionIndicator(event)),
-    [workspace.events],
+    () => scopedEvents.filter((event) => hasDeletionIndicator(event)),
+    [scopedEvents],
   )
   const missingChatContacts = useMemo(
     () => workspace.contacts.filter((contact) => contact.missingChat),
@@ -1515,7 +1671,7 @@ export default function App() {
     if (modalState.type === 'contact') {
       const summary = contactIndex.get(modalState.contactName)
       if (!summary) return null
-      const thread = eventsByContact.get(summary.name) ?? []
+      const thread = scopedEventsByContact.get(summary.name) ?? []
       const dateMarkers = buildDateMarkers(thread)
       const mediaEvents = thread.filter((event) => isMediaEvent(event))
       const modalTerms = queryTermsFromInput(deferredThreadSearch)
@@ -1866,8 +2022,8 @@ export default function App() {
     }
 
     if (modalState.type === 'timeline') {
-      const bucket = workspace.timeline.find((item) => item.key === modalState.dayKey)
-      const events = workspace.events.filter((event) => event.timestamp?.startsWith(modalState.dayKey))
+      const bucket = timelineBuckets.find((item) => item.key === modalState.dayKey)
+      const events = scopedEvents.filter((event) => event.timestamp?.startsWith(modalState.dayKey))
       if (!bucket) return null
 
       return (
@@ -2058,6 +2214,40 @@ export default function App() {
                 Large export detected. The app will stay in lightweight mode until you open one contact and run AI on that thread.
               </p>
             ) : null}
+            <div className="year-lens-strip">
+              <label className="search-field">
+                <span>Year</span>
+                <select onChange={(event) => setYearFilter(event.target.value)} value={yearFilter}>
+                  <option value="all">All years</option>
+                  {availableYears.map((year) => (
+                    <option key={year} value={year}>
+                      {year}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="search-field">
+                <span>Compare with</span>
+                <select onChange={(event) => setComparisonYear(event.target.value)} value={comparisonYear}>
+                  <option value="all">No compare</option>
+                  {availableYears.map((year) => (
+                    <option key={`compare-${year}`} value={year}>
+                      {year}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button
+                className="ghost-button"
+                onClick={() => {
+                  setYearFilter('all')
+                  setComparisonYear('all')
+                }}
+                type="button"
+              >
+                Clear year lens
+              </button>
+            </div>
           </div>
           <div className="button-row">
             <span className="outline-pill">{isHydrating ? 'restoring local workspace...' : 'auto-save on'}</span>
@@ -2217,6 +2407,65 @@ export default function App() {
             </section>
 
             <section className="dashboard-grid">
+              <article className="panel year-compare-panel">
+                <SectionHeader
+                  eyebrow="Year lens"
+                  subtitle={
+                    yearComparison
+                      ? `Comparing ${yearLabel(yearComparison.selectedYear)} against ${yearLabel(yearComparison.compareYear)}.`
+                      : 'Choose a year and a comparison year to compare overlap, returns, and gaps.'
+                  }
+                  title="Year comparison"
+                />
+                {yearComparison ? (
+                  <>
+                    <div className="contact-summary-grid">
+                      <article className="mini-stat">
+                        <span>Selected year contacts</span>
+                        <strong>{yearComparison.selectedCount}</strong>
+                      </article>
+                      <article className="mini-stat">
+                        <span>Compare year contacts</span>
+                        <strong>{yearComparison.compareCount}</strong>
+                      </article>
+                      <article className="mini-stat">
+                        <span>Shared contacts</span>
+                        <strong>{yearComparison.sharedCount}</strong>
+                      </article>
+                      <article className="mini-stat">
+                        <span>Gap reappearances</span>
+                        <strong>{yearComparison.reappeared.length}</strong>
+                      </article>
+                    </div>
+                    <div className="stack-list compact-stack">
+                      {yearComparison.reappeared.map((entry) => (
+                        <button
+                          className="list-button"
+                          key={entry.contact}
+                          onClick={() => openContactModal(entry.contact)}
+                          type="button"
+                        >
+                          <div className="list-head">
+                            <strong>{entry.contact}</strong>
+                            <span>{entry.gap}-year gap</span>
+                          </div>
+                          <p>
+                            Previous appearance {entry.previousYear}. Deletion indicators: {entry.deletionIndicators}.
+                          </p>
+                        </button>
+                      ))}
+                      {yearComparison.reappeared.length === 0 ? (
+                        <p className="empty-state">No clear gap-based reappearances were detected in this comparison.</p>
+                      ) : null}
+                    </div>
+                  </>
+                ) : (
+                  <p className="empty-state">Pick a year and an older year to compare contact overlap.</p>
+                )}
+              </article>
+            </section>
+
+            <section className="dashboard-grid">
               <article className="panel">
                 <SectionHeader
                   eyebrow="Priority review"
@@ -2233,7 +2482,12 @@ export default function App() {
                     >
                       <div className="list-head">
                         <strong>{contact.name}</strong>
-                        <span>{contact.messageCount} chat rows</span>
+                        <span>
+                          {contact.messageCount} chat rows
+                          {yearFilter !== 'all'
+                            ? ` · ${scopedContactCounts.get(contact.name) ?? 0} in ${yearLabel(selectedYearValue)}`
+                            : ''}
+                        </span>
                       </div>
                       <div className="score-row">
                         <ScorePill label="Romance" value={contact.romanticScore} />
@@ -2361,7 +2615,12 @@ export default function App() {
                   >
                     <div className="contact-row-main">
                       <strong>{contact.name}</strong>
-                      <span>{contact.messageCount} chat rows</span>
+                      <span>
+                        {contact.messageCount} chat rows
+                        {yearFilter !== 'all'
+                          ? ` · ${scopedContactCounts.get(contact.name) ?? 0} in ${yearLabel(selectedYearValue)}`
+                          : ''}
+                      </span>
                     </div>
                     <div className="contact-row-meta">
                       <ScorePill label="R" value={contact.romanticScore} />
@@ -2386,7 +2645,7 @@ export default function App() {
                   ) : null
                 }
                 eyebrow="Selected contact"
-                subtitle="Click a contact to load the full parsed thread here. Every row stays clickable for raw detail."
+                subtitle={`Click a contact to load the full parsed thread here. Showing ${yearLabel(selectedYearValue)}.`}
                 title={selectedSummary?.name ?? 'Choose a contact'}
               />
               {selectedSummary ? (
@@ -2398,7 +2657,7 @@ export default function App() {
                     </article>
                     <article className="mini-stat">
                       <span>Messages</span>
-                      <strong>{selectedSummary.messageCount}</strong>
+                      <strong>{selectedThreadMessageCount}</strong>
                     </article>
                     <article className="mini-stat">
                       <span>First message</span>
@@ -2751,7 +3010,7 @@ export default function App() {
                 title="Notable periods and event clusters"
               />
               <div className="timeline-chart compact-chart">
-                {workspace.timeline.slice(-21).map((bucket) => (
+                {timelineBuckets.slice(-21).map((bucket) => (
                   <button
                     className="timeline-bar button-bar"
                     key={bucket.key}
@@ -2763,7 +3022,7 @@ export default function App() {
                       style={{
                         height: `${Math.max(
                           10,
-                          (bucket.count / Math.max(...workspace.timeline.map((item) => item.count), 1)) * 100,
+                          (bucket.count / Math.max(...timelineBuckets.map((item) => item.count), 1)) * 100,
                         )}%`,
                       }}
                     />
