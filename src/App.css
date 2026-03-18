@@ -545,6 +545,7 @@
 .message-row {
   display: grid;
   gap: 0.5rem;
+  min-width: 0;
 }
 
 .message-row.role-self {
@@ -578,6 +579,7 @@
   border-radius: 18px;
   border: 1px solid rgba(108, 255, 193, 0.12);
   background: rgba(9, 16, 24, 0.92);
+  min-width: 0;
 }
 
 .message-row.role-self .message-bubble {
@@ -601,8 +603,43 @@
   display: block;
   white-space: pre-wrap;
   line-height: 1.62;
+  overflow-wrap: anywhere;
   word-break: break-word;
   color: #f2f7fd;
+}
+
+.transcript-stack {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.transcript-block {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.75rem 0.85rem;
+  border-radius: 14px;
+  border: 1px solid rgba(111, 255, 190, 0.14);
+  background: rgba(5, 10, 16, 0.82);
+}
+
+.transcript-timestamp {
+  color: #7fe3ff;
+  font-size: 0.76rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.transcript-actor {
+  color: #f7fbff;
+  font-size: 0.92rem;
+}
+
+.transcript-body {
+  white-space: pre-wrap;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  color: #eef6ff;
 }
 
 .message-source-line {
@@ -791,6 +828,8 @@
   border: 1px solid rgba(111, 255, 190, 0.12);
   white-space: pre-wrap;
   line-height: 1.6;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .json-block,

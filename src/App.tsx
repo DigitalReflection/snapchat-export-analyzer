@@ -26,6 +26,7 @@ import {
   downloadContactsCsv,
   downloadEventsJson,
   downloadKeywordHitsCsv,
+  downloadPlainText,
   downloadWorkspaceReport,
 } from './lib/exporters'
 import { buildWorkspaceLite } from './lib/insights'
@@ -33,6 +34,8 @@ import { clearSnapshot, loadSnapshot, saveSnapshot } from './lib/persistence'
 import { parseFacebookFileList, parseFacebookZip } from './lib/facebookParser'
 import { parseSnapchatFileList, parseSnapchatZip } from './lib/snapchatParser'
 import { sampleFacebookUpload, sampleSnapchatUpload } from './sampleData'
+
+/* eslint-disable no-misleading-character-class */
 
 type ContactLabel = 'male' | 'female' | 'unknown'
 type ActiveTab = 'overview' | 'chats' | 'search' | 'signals' | 'ai' | 'data'
@@ -201,6 +204,11 @@ type ContactDateMarker = {
 }
 
 type ConversationRole = 'self' | 'contact' | 'system'
+type TranscriptBlock = {
+  timestamp: string | null
+  actor: string | null
+  text: string
+}
 
 function formatDate(value: string | null) {
   if (!value) return 'Unknown'
@@ -307,6 +315,108 @@ function formatPlainConversationText(value: string | null | undefined) {
   }
 
   return preserveBodyText(plain)
+}
+
+const THREAD_TIMESTAMP_PATTERN =
+  /\b(?:[A-Z][a-z]{2,8} \d{1,2}, \d{4} \d{1,2}:\d{2}:\d{2} ?(?:am|pm)|\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC)\b/g
+
+function extractLeadingActor(text: string) {
+  const cleaned = text.replace(/^[\s,:;'"`❤︎•-]+/, '')
+  const match = cleaned.match(
+    /^([A-Z][A-Za-z0-9'’._-]+(?:\s+[A-Z][A-Za-z0-9'’._-]+){1,3})(?:\s+|)(.*)$/,
+  )
+
+  if (!match) {
+    return { actor: null, text: cleaned }
+  }
+
+  const actor = match[1].trim()
+  const body = compact(match[2])
+  if (!body) {
+    return { actor: null, text: cleaned }
+  }
+
+  return { actor, text: body }
+}
+
+function splitReadableTranscript(value: string | null | undefined) {
+  const plain = formatPlainConversationText(value)
+  if (!plain) {
+    return []
+  }
+
+  const matches = [...plain.matchAll(THREAD_TIMESTAMP_PATTERN)]
+  if (matches.length <= 1) {
+    const { actor, text } = extractLeadingActor(plain)
+    return [{ timestamp: null, actor, text }]
+  }
+
+  const blocks: TranscriptBlock[] = []
+
+  matches.forEach((match, index) => {
+    const timestamp = match[0]?.trim() ?? null
+    const start = (match.index ?? 0) + (match[0]?.length ?? 0)
+    const end = matches[index + 1]?.index ?? plain.length
+    const segment = plain.slice(start, end).replace(/^[,:;\s"'`]+/, '').trim()
+    if (!segment) {
+      return
+    }
+
+    const { actor, text } = extractLeadingActor(segment)
+    blocks.push({
+      timestamp,
+      actor,
+      text: text || segment,
+    })
+  })
+
+  return blocks
+}
+
+function renderTranscriptBlocks(value: string | null | undefined, terms: string[]) {
+  const blocks = splitReadableTranscript(value)
+  if (!blocks.length) {
+    return null
+  }
+
+  return blocks.map((block, index) => (
+    <div className="transcript-block" key={`${block.timestamp ?? 'block'}-${index}`}>
+      {block.timestamp ? <span className="transcript-timestamp">{block.timestamp}</span> : null}
+      {block.actor ? <strong className="transcript-actor">{block.actor}</strong> : null}
+      <div className="transcript-body">
+        <HighlightedText terms={terms} text={block.text} />
+      </div>
+    </div>
+  ))
+}
+
+function buildReadableTranscript(events: NormalizedEvent[], aliasIndex: Map<string, Set<string>>) {
+  return events
+    .map((event) => {
+      const role = resolveConversationRole(event, aliasIndex)
+      const actor = extractActorValue(event) ?? (role === 'self' ? 'You' : event.contact ?? 'Unknown')
+      const header = `${formatThreadTimestamp(event.timestamp)} — ${actor} [${event.category}]`
+      const blocks = splitReadableTranscript(event.text ?? event.detail ?? event.evidenceText)
+
+      if (!blocks.length) {
+        const body = eventSummaryText(event)
+        return [header, body, `Source: ${event.sourceFile}`, ''].join('\n')
+      }
+
+      const blockText = blocks
+        .map((block) => {
+          const lines = [
+            block.timestamp ? `  ${block.timestamp}` : null,
+            block.actor ? `  ${block.actor}` : null,
+            `  ${block.text}`,
+          ].filter(Boolean)
+          return lines.join('\n')
+        })
+        .join('\n')
+
+      return [header, blockText, `Source: ${event.sourceFile}`, ''].join('\n')
+    })
+    .join('\n')
 }
 
 function escapeRegExp(value: string) {
@@ -553,17 +663,13 @@ function ConversationList(props: {
                 <span className="message-actor">
                   {extractActorValue(event) ?? (role === 'self' ? 'You' : event.contact ?? 'Unknown')}
                 </span>
-                <span className="message-copy">
-                  {props.plainTextOnly ? (
-                    displayText ? (
-                      <HighlightedText terms={props.terms} text={displayText} />
-                    ) : (
-                      <span className="muted-text">No readable chat text was recovered for this row.</span>
-                    )
+                <div className="message-copy">
+                  {displayText ? (
+                    renderTranscriptBlocks(displayText, props.terms)
                   ) : (
-                    <HighlightedText terms={props.terms} text={displayText || 'No visible text for this row.'} />
+                    <span className="muted-text">No readable chat text was recovered for this row.</span>
                   )}
-                </span>
+                </div>
               </div>
               <span className="message-source-line mono">
                 [{event.id}] {event.sourceFile}
@@ -1136,6 +1242,16 @@ export default function App() {
     () => selectedVisibleThread.slice(0, selectedThreadLimit),
     [selectedThreadLimit, selectedVisibleThread],
   )
+
+  function handleDownloadSelectedTranscript() {
+    if (!selectedSummary) return
+
+    const transcript = buildReadableTranscript(selectedVisibleThread, aliasIndex)
+    downloadPlainText(
+      `${selectedSummary.name.replace(/[^\w.-]+/g, '_').slice(0, 60) || 'thread'}-transcript.txt`,
+      transcript || 'No readable transcript was recovered for this selection.',
+    )
+  }
 
   const selectedDateMarkers = useMemo(() => buildDateMarkers(selectedThread), [selectedThread])
   const selectedMediaEvents = useMemo(
@@ -1820,6 +1936,11 @@ export default function App() {
                     All linked rows
                   </button>
                 </div>
+                <div className="button-row">
+                  <button className="ghost-button" onClick={handleDownloadSelectedTranscript} type="button">
+                    Download TXT
+                  </button>
+                </div>
                 <label className="search-field inline-search">
                   <span>Find inside thread</span>
                   <input
@@ -1884,7 +2005,11 @@ export default function App() {
             </article>
             <article className="modal-card">
               <h4>Full text</h4>
-              <p className="raw-block">{eventSummaryText(event)}</p>
+              <div className="transcript-stack">
+                {renderTranscriptBlocks(event.text ?? event.detail ?? event.evidenceText, []) ?? (
+                  <p className="raw-block">{eventSummaryText(event)}</p>
+                )}
+              </div>
               <h4>Raw fields</h4>
               <pre className="json-block">{JSON.stringify(event.attributes, null, 2)}</pre>
             </article>
@@ -2690,12 +2815,15 @@ export default function App() {
                         key={label}
                         onClick={() => setContactLabels((current) => ({ ...current, [selectedSummary.name]: label }))}
                         type="button"
-                      >
-                        {label}
-                      </button>
+                    >
+                      {label}
+                    </button>
                     ))}
                     <button className="secondary-button" onClick={handleSelectedContactAiRun} type="button">
                       {isContactAiLoading ? 'AI organizing...' : 'Organize with AI'}
+                    </button>
+                    <button className="ghost-button" onClick={handleDownloadSelectedTranscript} type="button">
+                      Download TXT
                     </button>
                   </div>
 

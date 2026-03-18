@@ -34,6 +34,10 @@ function download(filename: string, content: string, type: string) {
   URL.revokeObjectURL(url)
 }
 
+export function downloadPlainText(filename: string, content: string) {
+  download(filename, content, 'text/plain;charset=utf-8')
+}
+
 export function downloadEventsJson(events: NormalizedEvent[]) {
   download(
     'communication-events.json',
