@@ -102,6 +102,23 @@ Default output:
 
 That path avoids reparsing the raw export in the browser on every refresh.
 
+## Offline Facebook chat viewer
+
+If you want a fast local-only Facebook chat viewer, run the exporter script on an extracted Facebook data folder. It writes a static HTML file to your Desktop with a thread list, readable message cards, and TXT download buttons.
+
+```bash
+python scripts/export_facebook_chat_viewer.py "C:\path\to\extracted\facebook-export"
+```
+
+Default output:
+
+```text
+%USERPROFILE%\Desktop\facebook_chat_viewer.html
+%USERPROFILE%\Desktop\facebook_chat_viewer.json
+```
+
+The page opens offline in your browser and keeps the chat text separated by sender, timestamp, and message body.
+
 ## Free hosting with GitHub Pages
 
 This project is set up for free static hosting on GitHub Pages using GitHub Actions.
