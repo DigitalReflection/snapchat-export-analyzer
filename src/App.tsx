@@ -2687,9 +2687,43 @@ export default function App() {
                   </span>
                 }
                 eyebrow="Contact browser"
-                subtitle="Lightweight mode only indexes contacts and thread rows on load. Open one contact and run AI only when needed."
+                subtitle={`Lightweight mode only indexes contacts and thread rows on load. Showing ${yearLabel(selectedYearValue)}.`}
                 title="Contacts"
               />
+              <div className="year-lens-strip chat-year-lens">
+                <label className="search-field">
+                  <span>Year</span>
+                  <select onChange={(event) => setYearFilter(event.target.value)} value={yearFilter}>
+                    <option value="all">All years</option>
+                    {availableYears.map((year) => (
+                      <option key={year} value={year}>
+                        {year}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="search-field">
+                  <span>Compare with</span>
+                  <select onChange={(event) => setComparisonYear(event.target.value)} value={comparisonYear}>
+                    <option value="all">No compare</option>
+                    {availableYears.map((year) => (
+                      <option key={`chat-compare-${year}`} value={year}>
+                        {year}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button
+                  className="ghost-button"
+                  onClick={() => {
+                    setYearFilter('all')
+                    setComparisonYear('all')
+                  }}
+                  type="button"
+                >
+                  Reset
+                </button>
+              </div>
               <div className="filter-grid">
                 <label className="search-field">
                   <span>Search</span>
