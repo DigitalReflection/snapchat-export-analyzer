@@ -655,6 +655,100 @@
   gap: 0.8rem;
 }
 
+.platform-facebook .facebook-conversation-list {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.platform-facebook .facebook-conversation-item {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.platform-facebook .facebook-day-separator {
+  width: fit-content;
+  margin: 0 auto;
+  padding: 0.3rem 0.75rem;
+  border-radius: 999px;
+  border: 1px solid rgba(138, 182, 255, 0.22);
+  background: rgba(15, 24, 40, 0.96);
+  color: #a8c6ff;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.platform-facebook .facebook-turn-card {
+  display: grid;
+  gap: 0.85rem;
+  width: 100%;
+  padding: 1rem 1.05rem;
+  border-radius: 18px;
+  border: 1px solid rgba(138, 182, 255, 0.18);
+  background: linear-gradient(180deg, rgba(12, 18, 30, 0.96), rgba(8, 13, 24, 0.94));
+  text-align: left;
+  color: #eef6ff;
+}
+
+.platform-facebook .facebook-turn-card.role-self {
+  border-color: rgba(138, 182, 255, 0.36);
+  background: linear-gradient(180deg, rgba(28, 83, 217, 0.94), rgba(18, 54, 150, 0.92));
+}
+
+.platform-facebook .facebook-turn-card.role-contact,
+.platform-facebook .facebook-turn-card.role-system {
+  background: linear-gradient(180deg, rgba(12, 18, 30, 0.98), rgba(8, 13, 24, 0.94));
+}
+
+.platform-facebook .facebook-turn-head {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.platform-facebook .facebook-turn-identity {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.platform-facebook .facebook-turn-actor {
+  font-size: 0.98rem;
+  letter-spacing: 0.02em;
+  color: #f7fbff;
+  font-weight: 800;
+}
+
+.platform-facebook .facebook-turn-time {
+  font-size: 0.78rem;
+  color: #c5d8f2;
+}
+
+.platform-facebook .facebook-turn-meta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.platform-facebook .facebook-turn-source {
+  color: #9ab6d0;
+  font-size: 0.75rem;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.platform-facebook .facebook-turn-body {
+  display: grid;
+  gap: 0.5rem;
+  white-space: pre-wrap;
+  line-height: 1.72;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.platform-facebook .facebook-turn-card .muted-text {
+  color: #a1b6cc;
+}
+
 .conversation-item {
   display: grid;
   gap: 0.4rem;
