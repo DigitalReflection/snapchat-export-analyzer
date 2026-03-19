@@ -35,12 +35,11 @@ import { parseFacebookFileList, parseFacebookZip } from './lib/facebookParser'
 import { parseSnapchatFileList, parseSnapchatZip } from './lib/snapchatParser'
 import { sampleFacebookUpload, sampleSnapchatUpload } from './sampleData'
 
-/* eslint-disable no-misleading-character-class */
-
 type ContactLabel = 'male' | 'female' | 'unknown'
 type ActiveTab = 'overview' | 'chats' | 'search' | 'signals' | 'ai' | 'data'
 type ContactSort = 'activity' | 'messages' | 'romance' | 'secrecy' | 'recent' | 'missing'
 type ThreadMode = 'chat' | 'all'
+type ThreadSort = 'newest' | 'oldest'
 type MetricKey = 'contacts' | 'threads' | 'missing' | 'deletions' | 'timing' | 'files'
 
 type ModalState =
@@ -59,12 +58,12 @@ const CONTACT_LABELS_KEY = 'export-viewer-pro-contact-labels'
 const LOCK_CODE_KEY = 'export-viewer-pro-lock-code'
 const LAST_PLATFORM_KEY = 'export-viewer-pro-last-platform'
 const DEFAULT_MODELS: Record<AIProvider, string> = {
-  gemini: 'gemini-2.5-flash-lite',
-  openai: 'gpt-5-nano',
+  gemini: 'gemini-2.5-pro',
+  openai: 'gpt-5.1',
 }
 const MODEL_PRESETS: Record<AIProvider, string[]> = {
-  gemini: ['gemini-2.5-flash-lite', 'gemini-2.5-flash'],
-  openai: ['gpt-5-nano'],
+  gemini: ['gemini-2.5-pro', 'gemini-2.5-flash'],
+  openai: ['gpt-5.1', 'gpt-5-mini'],
 }
 const PLATFORM_CONFIG: Record<
   Platform,
@@ -320,23 +319,10 @@ function formatPlainConversationText(value: string | null | undefined) {
 const THREAD_TIMESTAMP_PATTERN =
   /\b(?:[A-Z][a-z]{2,8} \d{1,2}, \d{4} \d{1,2}:\d{2}:\d{2} ?(?:am|pm)|\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC)\b/g
 
-function extractLeadingActor(text: string) {
-  const cleaned = text.replace(/^[\s,:;'"`❤︎•-]+/, '')
-  const match = cleaned.match(
-    /^([A-Z][A-Za-z0-9'’._-]+(?:\s+[A-Z][A-Za-z0-9'’._-]+){1,3})(?:\s+|)(.*)$/,
-  )
-
-  if (!match) {
-    return { actor: null, text: cleaned }
-  }
-
-  const actor = match[1].trim()
-  const body = compact(match[2])
-  if (!body) {
-    return { actor: null, text: cleaned }
-  }
-
-  return { actor, text: body }
+function separateCamelCaseWords(value: string) {
+  return value
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/([A-Z]{2,})([A-Z][a-z])/g, '$1 $2')
 }
 
 function splitReadableTranscript(value: string | null | undefined) {
@@ -347,7 +333,7 @@ function splitReadableTranscript(value: string | null | undefined) {
 
   const matches = [...plain.matchAll(THREAD_TIMESTAMP_PATTERN)]
   if (matches.length <= 1) {
-    const { actor, text } = extractLeadingActor(plain)
+    const { actor, text } = extractTranscriptActor(plain)
     return [{ timestamp: null, actor, text }]
   }
 
@@ -362,7 +348,7 @@ function splitReadableTranscript(value: string | null | undefined) {
       return
     }
 
-    const { actor, text } = extractLeadingActor(segment)
+    const { actor, text } = extractTranscriptActor(segment)
     blocks.push({
       timestamp,
       actor,
@@ -388,6 +374,48 @@ function renderTranscriptBlocks(value: string | null | undefined, terms: string[
       </div>
     </div>
   ))
+}
+
+function extractTranscriptActor(text: string) {
+  const cleaned = separateCamelCaseWords(text.replace(/^[\s,:;'"`â¤ï¸Ž€¢-]+/, ''))
+  const openMatch = cleaned.match(
+    /^([A-Z][A-Za-z0-9'._-]+(?:\s+[A-Z][A-Za-z0-9'._-]+){1,3})(?:\s+|)(.*)$/,
+  )
+
+  if (!openMatch) {
+    return { actor: null, text: cleaned }
+  }
+
+  const actor = openMatch[1].trim()
+  const body = compact(openMatch[2])
+  if (!body) {
+    return { actor: null, text: cleaned }
+  }
+
+  return { actor, text: body }
+}
+
+function sortThreadEvents(events: NormalizedEvent[], sortOrder: ThreadSort) {
+  return [...events].sort((left, right) => {
+    const leftTime = left.timestamp ?? ''
+    const rightTime = right.timestamp ?? ''
+
+    if (leftTime && rightTime) {
+      return sortOrder === 'newest'
+        ? rightTime.localeCompare(leftTime)
+        : leftTime.localeCompare(rightTime)
+    }
+
+    if (leftTime) {
+      return sortOrder === 'newest' ? -1 : 1
+    }
+
+    if (rightTime) {
+      return sortOrder === 'newest' ? 1 : -1
+    }
+
+    return left.id.localeCompare(right.id)
+  })
 }
 
 function buildReadableTranscript(events: NormalizedEvent[], aliasIndex: Map<string, Set<string>>) {
@@ -635,17 +663,21 @@ function ConversationList(props: {
   onEventClick: (eventId: string) => void
   terms: string[]
   plainTextOnly?: boolean
+  sortOrder: ThreadSort
 }) {
+  const events = sortThreadEvents(props.events, props.sortOrder)
+
   return (
     <div className="conversation-list">
-      {props.events.map((event, index) => {
+      {events.map((event, index) => {
         const dayKey = event.timestamp?.slice(0, 10) ?? `undated-${event.id}`
         const previousDayKey =
-          props.events[index - 1]?.timestamp?.slice(0, 10) ?? `undated-${props.events[index - 1]?.id ?? 'start'}`
+          events[index - 1]?.timestamp?.slice(0, 10) ?? `undated-${events[index - 1]?.id ?? 'start'}`
         const showDay = index === 0 || dayKey !== previousDayKey
         const role = resolveConversationRole(event, props.aliasIndex)
 
         const displayText = props.plainTextOnly ? eventConversationText(event) : eventSummaryText(event)
+        const transcriptBlocks = props.plainTextOnly ? splitReadableTranscript(displayText) : []
 
         return (
           <div className={`conversation-item role-${role}`} key={event.id}>
@@ -663,13 +695,29 @@ function ConversationList(props: {
                 <span className="message-actor">
                   {extractActorValue(event) ?? (role === 'self' ? 'You' : event.contact ?? 'Unknown')}
                 </span>
-                <div className="message-copy">
-                  {displayText ? (
-                    renderTranscriptBlocks(displayText, props.terms)
-                  ) : (
-                    <span className="muted-text">No readable chat text was recovered for this row.</span>
-                  )}
-                </div>
+                {props.plainTextOnly && transcriptBlocks.length > 0 ? (
+                  <div className="transcript-stream">
+                    {transcriptBlocks.map((block, blockIndex) => (
+                      <div className="transcript-turn" key={`${event.id}-${blockIndex}`}>
+                        <div className="transcript-turn-head">
+                          {block.timestamp ? <span className="transcript-timestamp">{block.timestamp}</span> : null}
+                          {block.actor ? <strong className="transcript-actor">{block.actor}</strong> : null}
+                        </div>
+                        <div className="transcript-body">
+                          <HighlightedText terms={props.terms} text={block.text} />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="message-copy">
+                    {displayText ? (
+                      renderTranscriptBlocks(displayText, props.terms)
+                    ) : (
+                      <span className="muted-text">No readable chat text was recovered for this row.</span>
+                    )}
+                  </div>
+                )}
               </div>
               <span className="message-source-line mono">
                 [{event.id}] {event.sourceFile}
@@ -825,6 +873,7 @@ export default function App() {
   const [contactGroupFilter, setContactGroupFilter] = useState<'all' | ContactLabel>('all')
   const [searchQuery, setSearchQuery] = useState('delete this, Jordan, address')
   const [threadMode, setThreadMode] = useState<ThreadMode>('chat')
+  const [threadSort, setThreadSort] = useState<ThreadSort>('newest')
   const [threadSearch, setThreadSearch] = useState('')
   const [selectedThreadLimit, setSelectedThreadLimit] = useState(THREAD_PAGE_SIZE)
   const [modalThreadLimit, setModalThreadLimit] = useState(THREAD_PAGE_SIZE)
@@ -1165,10 +1214,10 @@ export default function App() {
 
   useEffect(() => {
     setSelectedThreadLimit(THREAD_PAGE_SIZE)
-  }, [selectedContact, threadMode])
+  }, [selectedContact, threadMode, threadSort])
   useEffect(() => {
     setModalThreadLimit(THREAD_PAGE_SIZE)
-  }, [modalState, threadMode])
+  }, [modalState, threadMode, threadSort])
 
   const filteredContacts = useMemo(() => {
     const needle = deferredContactSearch.trim().toLowerCase()
@@ -1209,6 +1258,18 @@ export default function App() {
     if (!selectedSummary) return []
     return scopedEventsByContact.get(selectedSummary.name) ?? []
   }, [scopedEventsByContact, selectedSummary])
+  const selectedThreadSorted = useMemo(
+    () => sortThreadEvents(selectedThread, threadSort),
+    [selectedThread, threadSort],
+  )
+  const selectedThreadNewestFirst = useMemo(
+    () => sortThreadEvents(selectedThread, 'newest'),
+    [selectedThread],
+  )
+  const selectedThreadOldestFirst = useMemo(
+    () => sortThreadEvents(selectedThread, 'oldest'),
+    [selectedThread],
+  )
   const selectedThreadMessageCount = useMemo(
     () => selectedThread.filter((event) => event.category === 'chat').length,
     [selectedThread],
@@ -1216,7 +1277,7 @@ export default function App() {
 
   const selectedVisibleThread = useMemo(() => {
     const threadTerms = queryTermsFromInput(deferredThreadSearch)
-    return selectedThread.filter((event) => {
+    return selectedThreadSorted.filter((event) => {
       if (threadMode === 'chat' && event.category !== 'chat') {
         return false
       }
@@ -1233,7 +1294,7 @@ export default function App() {
 
       return threadTerms.some((term) => haystack.includes(term))
     })
-  }, [deferredThreadSearch, selectedThread, threadMode])
+  }, [deferredThreadSearch, selectedThreadSorted, threadMode])
   const selectedThreadTerms = useMemo(
     () => queryTermsFromInput(deferredThreadSearch),
     [deferredThreadSearch],
@@ -1282,6 +1343,8 @@ export default function App() {
     () => Math.max(1, Math.ceil(selectedThreadTokenEstimate / 3500)),
     [selectedThreadTokenEstimate],
   )
+  const selectedThreadLatestEvent = selectedThreadNewestFirst[0] ?? null
+  const selectedThreadOldestEvent = selectedThreadOldestFirst[0] ?? null
   const contactAiProgressPercent = useMemo(
     () => clampPercent((contactAiProgress.completed / Math.max(contactAiProgress.total, 1)) * 100),
     [contactAiProgress],
@@ -1788,10 +1851,11 @@ export default function App() {
       const summary = contactIndex.get(modalState.contactName)
       if (!summary) return null
       const thread = scopedEventsByContact.get(summary.name) ?? []
-      const dateMarkers = buildDateMarkers(thread)
-      const mediaEvents = thread.filter((event) => isMediaEvent(event))
+      const orderedThread = sortThreadEvents(thread, threadSort)
+      const dateMarkers = buildDateMarkers(orderedThread)
+      const mediaEvents = orderedThread.filter((event) => isMediaEvent(event))
       const modalTerms = queryTermsFromInput(deferredThreadSearch)
-      const visibleThread = thread.filter((event) => {
+      const visibleThread = orderedThread.filter((event) => {
         if (threadMode === 'chat' && event.category !== 'chat') return false
         if (threadMode === 'chat' && !eventConversationText(event)) return false
         if (!modalTerms.length) return true
@@ -1922,6 +1986,20 @@ export default function App() {
               <div className="thread-toolbar">
                 <div className="button-row">
                   <button
+                    className={threadSort === 'newest' ? 'tab-button active' : 'tab-button'}
+                    onClick={() => setThreadSort('newest')}
+                    type="button"
+                  >
+                    Newest first
+                  </button>
+                  <button
+                    className={threadSort === 'oldest' ? 'tab-button active' : 'tab-button'}
+                    onClick={() => setThreadSort('oldest')}
+                    type="button"
+                  >
+                    Oldest first
+                  </button>
+                  <button
                     className={threadMode === 'chat' ? 'tab-button active' : 'tab-button'}
                     onClick={() => setThreadMode('chat')}
                     type="button"
@@ -1958,6 +2036,7 @@ export default function App() {
                   events={visibleThreadPage}
                   onEventClick={(eventId) => setModalState({ type: 'event', eventId })}
                   plainTextOnly={threadMode === 'chat'}
+                  sortOrder={threadSort}
                   terms={modalTerms}
                 />
                 {visibleThread.length === 0 ? (
@@ -2834,6 +2913,14 @@ export default function App() {
                       <span>Last activity</span>
                       <strong>{formatDay(selectedMarkerMap['Last activity']?.timestamp ?? null)}</strong>
                     </article>
+                    <article className="mini-stat">
+                      <span>Latest sent</span>
+                      <strong>{formatThreadTimestamp(selectedThreadLatestEvent?.timestamp ?? null)}</strong>
+                    </article>
+                    <article className="mini-stat">
+                      <span>Oldest sent</span>
+                      <strong>{formatThreadTimestamp(selectedThreadOldestEvent?.timestamp ?? null)}</strong>
+                    </article>
                   </div>
 
                   <div className="score-row">
@@ -2910,6 +2997,20 @@ export default function App() {
                       <h3>Parsed thread</h3>
                       <div className="button-row">
                         <button
+                          className={threadSort === 'newest' ? 'tab-button active' : 'tab-button'}
+                          onClick={() => setThreadSort('newest')}
+                          type="button"
+                        >
+                          Newest first
+                        </button>
+                        <button
+                          className={threadSort === 'oldest' ? 'tab-button active' : 'tab-button'}
+                          onClick={() => setThreadSort('oldest')}
+                          type="button"
+                        >
+                          Oldest first
+                        </button>
+                        <button
                           className={threadMode === 'chat' ? 'tab-button active' : 'tab-button'}
                           onClick={() => setThreadMode('chat')}
                           type="button"
@@ -2940,6 +3041,7 @@ export default function App() {
                         events={selectedVisibleThreadPage}
                         onEventClick={(eventId) => setModalState({ type: 'event', eventId })}
                         plainTextOnly={threadMode === 'chat'}
+                        sortOrder={threadSort}
                         terms={selectedThreadTerms}
                       />
                       {selectedVisibleThread.length === 0 ? (
@@ -3031,6 +3133,35 @@ export default function App() {
                       ))}
                       {missingChatContacts.length === 0 ? (
                         <p className="empty-state">No missing-thread contacts detected.</p>
+                      ) : null}
+                    </div>
+                  </article>
+
+                  <article className="subpanel">
+                    <h3>Deletion and return traces</h3>
+                    <div className="stack-list compact-stack">
+                      {yearComparison?.reappeared.slice(0, 5).map((entry) => (
+                        <button
+                          className="list-button"
+                          key={`${entry.contact}-${entry.previousYear}`}
+                          onClick={() => openContactModal(entry.contact)}
+                          type="button"
+                        >
+                          <div className="list-head">
+                            <strong>{entry.contact}</strong>
+                            <span>gap {entry.gap} year(s)</span>
+                          </div>
+                          <p>
+                            Reappeared in {yearComparison.selectedYear} after last being seen in {entry.previousYear}.{' '}
+                            {entry.deletionIndicators > 0 ? `${entry.deletionIndicators} deletion cue(s) in the contact trace.` : 'No direct deletion cue was parsed.'}
+                          </p>
+                        </button>
+                      ))}
+                      {yearComparison && yearComparison.reappeared.length === 0 ? (
+                        <p className="empty-state">No gap-based reappearances were detected for the selected comparison.</p>
+                      ) : null}
+                      {!yearComparison ? (
+                        <p className="empty-state">Pick a selected year and comparison year to surface return traces.</p>
                       ) : null}
                     </div>
                   </article>

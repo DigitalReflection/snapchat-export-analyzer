@@ -66,8 +66,9 @@
 
 .chat-layout {
   display: grid;
-  grid-template-columns: 360px minmax(0, 1fr);
+  grid-template-columns: minmax(320px, 380px) minmax(0, 1fr);
   gap: 1rem;
+  align-items: start;
 }
 
 .masthead,
@@ -410,6 +411,7 @@
 .selector-panel {
   display: grid;
   gap: 0.9rem;
+  min-width: 0;
 }
 
 .chat-sidebar {
@@ -478,7 +480,7 @@
 }
 
 .main-thread-scroll {
-  max-height: 48vh;
+  max-height: 56vh;
 }
 
 .lock-panel {
@@ -600,12 +602,34 @@
 }
 
 .message-copy {
-  display: block;
+  display: grid;
+  gap: 0.7rem;
   white-space: pre-wrap;
   line-height: 1.62;
   overflow-wrap: anywhere;
   word-break: break-word;
   color: #f2f7fd;
+}
+
+.transcript-stream {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.transcript-turn {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.85rem 0.9rem;
+  border-radius: 14px;
+  border: 1px solid rgba(111, 255, 190, 0.14);
+  background: rgba(5, 10, 16, 0.88);
+}
+
+.transcript-turn-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  align-items: center;
 }
 
 .transcript-stack {
@@ -635,6 +659,7 @@
 }
 
 .transcript-body {
+  display: block;
   white-space: pre-wrap;
   line-height: 1.6;
   overflow-wrap: anywhere;
@@ -832,6 +857,11 @@
   word-break: break-word;
 }
 
+.raw-block {
+  display: grid;
+  gap: 0.8rem;
+}
+
 .json-block,
 .ai-result pre {
   margin: 0;
@@ -946,5 +976,9 @@ mark {
 
   .year-lens-strip {
     grid-template-columns: 1fr;
+  }
+
+  .main-thread-scroll {
+    max-height: 44vh;
   }
 }
