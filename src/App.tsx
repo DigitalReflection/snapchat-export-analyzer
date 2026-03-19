@@ -661,7 +661,7 @@ function buildTimelineBuckets(events: NormalizedEvent[]) {
 }
 
 function extractActorValue(event: NormalizedEvent) {
-  const keys = ['sender', 'from', 'author', 'participant', 'display_name', 'user', 'username']
+  const keys = ['sender', 'sender_name', 'from', 'author', 'participant', 'display_name', 'user', 'username']
   for (const key of keys) {
     const value = event.attributes[key]
     if (typeof value === 'string' && value.trim()) {
@@ -2840,7 +2840,7 @@ export default function App() {
         ) : null}
 
         {activeTab === 'chats' ? (
-          <section className="chat-layout">
+          <section className={selectedPlatform === 'facebook' ? 'chat-layout facebook-workspace' : 'chat-layout'}>
             <article className="panel chat-sidebar">
               <SectionHeader
                 actions={
@@ -2957,309 +2957,311 @@ export default function App() {
             </article>
 
             <article className="panel chat-preview-panel">
-              <SectionHeader
-                actions={
-                  selectedSummary ? (
-                    <button className="primary-button" onClick={() => openContactModal(selectedSummary.name)} type="button">
-                      Open full thread
-                    </button>
-                  ) : null
-                }
-                eyebrow="Selected contact"
-                subtitle={`Click a contact to load the full parsed thread here. Showing ${yearLabel(selectedYearValue)}.`}
-                title={selectedSummary?.name ?? 'Choose a contact'}
-              />
               {selectedSummary ? (
                 <>
-                  <div className="contact-summary-grid">
-                    <article className="mini-stat">
-                      <span>Linked rows</span>
-                      <strong>{selectedThread.length}</strong>
-                    </article>
-                    <article className="mini-stat">
-                      <span>Messages</span>
-                      <strong>{selectedThreadMessageCount}</strong>
-                    </article>
-                    <article className="mini-stat">
-                      <span>First message</span>
-                      <strong>{formatDay(selectedMarkerMap['First message']?.timestamp ?? null)}</strong>
-                    </article>
-                    <article className="mini-stat">
-                      <span>Last message</span>
-                      <strong>{formatDay(selectedMarkerMap['Last message']?.timestamp ?? null)}</strong>
-                    </article>
-                    <article className="mini-stat">
-                      <span>First activity</span>
-                      <strong>{formatDay(selectedMarkerMap['First activity']?.timestamp ?? null)}</strong>
-                    </article>
-                    <article className="mini-stat">
-                      <span>Last activity</span>
-                      <strong>{formatDay(selectedMarkerMap['Last activity']?.timestamp ?? null)}</strong>
-                    </article>
-                    <article className="mini-stat">
-                      <span>Latest sent</span>
-                      <strong>{formatThreadTimestamp(selectedThreadLatestEvent?.timestamp ?? null)}</strong>
-                    </article>
-                    <article className="mini-stat">
-                      <span>Oldest sent</span>
-                      <strong>{formatThreadTimestamp(selectedThreadOldestEvent?.timestamp ?? null)}</strong>
-                    </article>
-                    <article className="mini-stat">
-                      <span>Year coverage</span>
-                      <strong>{selectedContactYears.length ? selectedContactYears.join(', ') : 'Unknown'}</strong>
-                    </article>
-                    <article className="mini-stat">
-                      <span>Gaps &gt;1y</span>
-                      <strong>{selectedContactYearGaps.length}</strong>
-                    </article>
-                  </div>
+                  <div className="facebook-thread-stack">
+                    <SectionHeader
+                      actions={
+                        selectedSummary ? (
+                          <button className="primary-button" onClick={() => openContactModal(selectedSummary.name)} type="button">
+                            Open full thread
+                          </button>
+                        ) : null
+                      }
+                      eyebrow="Selected contact"
+                      subtitle={`Facebook Messenger layout showing ${yearLabel(selectedYearValue)}. Click a contact to load the transcript, dates, and trace log.`}
+                      title={selectedSummary?.name ?? 'Choose a Facebook thread'}
+                    />
 
-                  <div className="score-row">
-                    <ScorePill label="Romance" value={selectedSummary.romanticScore} />
-                    <ScorePill label="Secrecy" value={selectedSummary.secrecyScore} />
-                    <ScorePill label="Intensity" value={selectedSummary.intensityScore} />
-                  </div>
-
-                  <div className="button-row">
-                    {(['male', 'female', 'unknown'] as ContactLabel[]).map((label) => (
-                      <button
-                        className={(contactLabels[selectedSummary.name] ?? 'unknown') === label ? 'label-button active' : 'label-button'}
-                        key={label}
-                        onClick={() => setContactLabels((current) => ({ ...current, [selectedSummary.name]: label }))}
-                        type="button"
-                    >
-                      {label}
-                    </button>
-                    ))}
-                    <button className="secondary-button" onClick={handleSelectedContactAiRun} type="button">
-                      {isContactAiLoading ? 'AI organizing...' : 'Organize with AI'}
-                    </button>
-                    <button className="ghost-button" onClick={handleDownloadSelectedTranscript} type="button">
-                      Download TXT
-                    </button>
-                  </div>
-
-                  <article className="subpanel">
-                    <div className="thread-header-row">
-                      <div>
-                        <h3>Thread intelligence</h3>
-                        <p className="section-copy">
-                          Runs only on the selected contact thread using the cheapest configured model.
-                        </p>
-                      </div>
-                      <span className="outline-pill">
-                        {aiSettings.provider} / {aiSettings.model}
-                      </span>
+                    <div className="contact-summary-grid">
+                      <article className="mini-stat">
+                        <span>Linked rows</span>
+                        <strong>{selectedThread.length}</strong>
+                      </article>
+                      <article className="mini-stat">
+                        <span>Messages</span>
+                        <strong>{selectedThreadMessageCount}</strong>
+                      </article>
+                      <article className="mini-stat">
+                        <span>First message</span>
+                        <strong>{formatDay(selectedMarkerMap['First message']?.timestamp ?? null)}</strong>
+                      </article>
+                      <article className="mini-stat">
+                        <span>Last message</span>
+                        <strong>{formatDay(selectedMarkerMap['Last message']?.timestamp ?? null)}</strong>
+                      </article>
+                      <article className="mini-stat">
+                        <span>Latest sent</span>
+                        <strong>{formatThreadTimestamp(selectedThreadLatestEvent?.timestamp ?? null)}</strong>
+                      </article>
+                      <article className="mini-stat">
+                        <span>Oldest sent</span>
+                        <strong>{formatThreadTimestamp(selectedThreadOldestEvent?.timestamp ?? null)}</strong>
+                      </article>
+                      <article className="mini-stat">
+                        <span>Year coverage</span>
+                        <strong>{selectedContactYears.length ? selectedContactYears.join(', ') : 'Unknown'}</strong>
+                      </article>
+                      <article className="mini-stat">
+                        <span>Gaps &gt;1y</span>
+                        <strong>{selectedContactYearGaps.length}</strong>
+                      </article>
                     </div>
+
                     <div className="score-row">
-                      <span className="outline-pill">{selectedThread.length} linked rows</span>
-                      <span className="outline-pill">{selectedThreadTokenEstimate.toLocaleString()} est. tokens</span>
-                      <span className="outline-pill">{selectedThreadChunkEstimate} AI chunk{selectedThreadChunkEstimate === 1 ? '' : 's'}</span>
+                      <ScorePill label="Romance" value={selectedSummary.romanticScore} />
+                      <ScorePill label="Secrecy" value={selectedSummary.secrecyScore} />
+                      <ScorePill label="Intensity" value={selectedSummary.intensityScore} />
                     </div>
-                    {contactAiError ? <p className="error-line">{contactAiError}</p> : null}
-                    {isContactAiLoading ? (
-                      <div className="ai-progress-card">
-                        <div className="result-meta">
-                          <span>{contactAiProgress.label || 'Organizing selected thread'}</span>
-                          <span>{contactAiProgressPercent.toFixed(0)}%</span>
-                        </div>
-                        <div className="progress-shell" aria-label="AI progress">
-                          <div className="progress-bar" style={{ width: `${contactAiProgressPercent}%` }} />
-                        </div>
-                      </div>
-                    ) : null}
-                    {selectedContactAiResult ? (
-                      <div className="ai-result">
-                        <div className="result-meta">
-                          <span>{selectedContactAiResult.provider}</span>
-                          <span>{formatDate(selectedContactAiResult.createdAt)}</span>
-                        </div>
-                        <p className="raw-block">{selectedContactAiResult.answer}</p>
-                      </div>
-                    ) : (
-                      <p className="empty-state">
-                        No selected-thread AI result yet. Open a contact and run AI to organize that one thread only.
-                      </p>
-                    )}
-                  </article>
 
-                  <article className="subpanel">
-            <div className="thread-header-row">
-              <h3>Parsed thread</h3>
-              <div className="button-row">
-                <button
-                  className={threadSort === 'newest' ? 'tab-button active' : 'tab-button'}
-                  onClick={() => setThreadSort('newest')}
-                          type="button"
-                        >
-                          Newest first
-                        </button>
+                    <div className="button-row">
+                      {(['male', 'female', 'unknown'] as ContactLabel[]).map((label) => (
                         <button
-                          className={threadSort === 'oldest' ? 'tab-button active' : 'tab-button'}
-                          onClick={() => setThreadSort('oldest')}
+                          className={(contactLabels[selectedSummary.name] ?? 'unknown') === label ? 'label-button active' : 'label-button'}
+                          key={label}
+                          onClick={() => setContactLabels((current) => ({ ...current, [selectedSummary.name]: label }))}
                           type="button"
                         >
-                          Oldest first
+                          {label}
                         </button>
-                        <button
-                          className={threadMode === 'chat' ? 'tab-button active' : 'tab-button'}
-                          onClick={() => setThreadMode('chat')}
-                          type="button"
-                        >
-                          Chat only
-                        </button>
-                        <button
-                          className={threadMode === 'all' ? 'tab-button active' : 'tab-button'}
-                          onClick={() => setThreadMode('all')}
-                          type="button"
-                        >
-                          All linked rows
-                        </button>
-                      </div>
+                      ))}
+                      <button className="secondary-button" onClick={handleSelectedContactAiRun} type="button">
+                        {isContactAiLoading ? 'AI organizing...' : 'Organize with AI'}
+                      </button>
+                      <button className="ghost-button" onClick={handleDownloadSelectedTranscript} type="button">
+                        Download TXT
+                      </button>
                     </div>
-                    <label className="search-field inline-search">
-                      <span>Find inside this thread</span>
-                      <input
-                        onChange={(event) => setThreadSearch(event.target.value)}
-                        placeholder="Name, phrase, address, delete..."
-                        type="search"
-                        value={threadSearch}
-                      />
-                    </label>
-                    <div className="thread-scroll main-thread-scroll">
-                      <ConversationList
-                        aliasIndex={aliasIndex}
-                        events={selectedVisibleThreadPage}
-                        onEventClick={(eventId) => setModalState({ type: 'event', eventId })}
-                        plainTextOnly={threadMode === 'chat'}
-                        sortOrder={threadSort}
-                        platform={selectedPlatform ?? 'snapchat'}
-                        terms={selectedThreadTerms}
-                      />
-                      {selectedVisibleThread.length === 0 ? (
-                        <p className="empty-state">No parsed rows matched this thread view.</p>
-                      ) : null}
-                      {selectedVisibleThread.length > selectedVisibleThreadPage.length ? (
-                        <button
-                          className="secondary-button load-more-button"
-                          onClick={() => setSelectedThreadLimit((current) => current + THREAD_PAGE_SIZE)}
-                          type="button"
-                        >
-                          Load {Math.min(THREAD_PAGE_SIZE, selectedVisibleThread.length - selectedVisibleThreadPage.length)} more rows
-                        </button>
-                      ) : null}
-                    </div>
-                  </article>
 
-                  <div className="detail-duo-grid">
                     <article className="subpanel">
-                      <h3>First and last markers</h3>
-                      <div className="stack-list compact-stack">
-                        {selectedDateMarkers.map((marker) => (
-                          <button
-                            className="list-button"
-                            key={`${marker.label}-${marker.event.id}`}
-                            onClick={() => setModalState({ type: 'event', eventId: marker.event.id })}
-                            type="button"
-                          >
-                            <div className="list-head">
-                              <strong>{marker.label}</strong>
-                              <span>{formatDate(marker.event.timestamp)}</span>
-                            </div>
-                            <p>{eventSummaryText(marker.event)}</p>
-                          </button>
-                        ))}
-                        {selectedDateMarkers.length === 0 ? (
-                          <p className="empty-state">No dated rows were recovered for this contact.</p>
-                        ) : null}
+                      <div className="thread-header-row">
+                        <div>
+                          <h3>Thread intelligence</h3>
+                          <p className="section-copy">
+                            Runs only on the selected contact thread using the cheapest configured model.
+                          </p>
+                        </div>
+                        <span className="outline-pill">
+                          {aiSettings.provider} / {aiSettings.model}
+                        </span>
                       </div>
+                      <div className="score-row">
+                        <span className="outline-pill">{selectedThread.length} linked rows</span>
+                        <span className="outline-pill">{selectedThreadTokenEstimate.toLocaleString()} est. tokens</span>
+                        <span className="outline-pill">{selectedThreadChunkEstimate} AI chunk{selectedThreadChunkEstimate === 1 ? '' : 's'}</span>
+                      </div>
+                      {contactAiError ? <p className="error-line">{contactAiError}</p> : null}
+                      {isContactAiLoading ? (
+                        <div className="ai-progress-card">
+                          <div className="result-meta">
+                            <span>{contactAiProgress.label || 'Organizing selected thread'}</span>
+                            <span>{contactAiProgressPercent.toFixed(0)}%</span>
+                          </div>
+                          <div className="progress-shell" aria-label="AI progress">
+                            <div className="progress-bar" style={{ width: `${contactAiProgressPercent}%` }} />
+                          </div>
+                        </div>
+                      ) : null}
+                      {selectedContactAiResult ? (
+                        <div className="ai-result">
+                          <div className="result-meta">
+                            <span>{selectedContactAiResult.provider}</span>
+                            <span>{formatDate(selectedContactAiResult.createdAt)}</span>
+                          </div>
+                          <p className="raw-block">{selectedContactAiResult.answer}</p>
+                        </div>
+                      ) : (
+                        <p className="empty-state">
+                          No selected-thread AI result yet. Open a contact and run AI to organize that one thread only.
+                        </p>
+                      )}
                     </article>
 
                     <article className="subpanel">
-                      <h3>Photo and media dates</h3>
-                      <div className="entity-grid compact">
-                        {selectedSourceFiles.map((source) => (
-                          <span className="outline-pill" key={source}>
-                            {source}
-                          </span>
-                        ))}
-                      </div>
-                      <div className="stack-list compact-stack media-stack">
-                        {selectedMediaEvents.map((event) => (
+                      <div className="thread-header-row">
+                        <h3>Parsed thread</h3>
+                        <div className="button-row">
                           <button
-                            className="list-button"
-                            key={event.id}
-                            onClick={() => setModalState({ type: 'event', eventId: event.id })}
+                            className={threadSort === 'newest' ? 'tab-button active' : 'tab-button'}
+                            onClick={() => setThreadSort('newest')}
                             type="button"
                           >
-                            <div className="list-head">
-                              <strong>{formatDate(event.timestamp)}</strong>
-                              <span>{event.category}</span>
-                            </div>
-                            <p>{eventSummaryText(event)}</p>
+                            Newest first
                           </button>
-                        ))}
-                        {selectedMediaEvents.length === 0 ? (
-                          <p className="empty-state">No contact-linked photo or media rows were recovered from the current export.</p>
+                          <button
+                            className={threadSort === 'oldest' ? 'tab-button active' : 'tab-button'}
+                            onClick={() => setThreadSort('oldest')}
+                            type="button"
+                          >
+                            Oldest first
+                          </button>
+                          <button
+                            className={threadMode === 'chat' ? 'tab-button active' : 'tab-button'}
+                            onClick={() => setThreadMode('chat')}
+                            type="button"
+                          >
+                            Chat only
+                          </button>
+                          <button
+                            className={threadMode === 'all' ? 'tab-button active' : 'tab-button'}
+                            onClick={() => setThreadMode('all')}
+                            type="button"
+                          >
+                            All linked rows
+                          </button>
+                        </div>
+                      </div>
+                      <label className="search-field inline-search">
+                        <span>Find inside this thread</span>
+                        <input
+                          onChange={(event) => setThreadSearch(event.target.value)}
+                          placeholder="Name, phrase, address, delete..."
+                          type="search"
+                          value={threadSearch}
+                        />
+                      </label>
+                      <div className="thread-scroll main-thread-scroll">
+                        <ConversationList
+                          aliasIndex={aliasIndex}
+                          events={selectedVisibleThreadPage}
+                          onEventClick={(eventId) => setModalState({ type: 'event', eventId })}
+                          plainTextOnly={threadMode === 'chat'}
+                          sortOrder={threadSort}
+                          platform={selectedPlatform ?? 'snapchat'}
+                          terms={selectedThreadTerms}
+                        />
+                        {selectedVisibleThread.length === 0 ? (
+                          <p className="empty-state">No parsed rows matched this thread view.</p>
+                        ) : null}
+                        {selectedVisibleThread.length > selectedVisibleThreadPage.length ? (
+                          <button
+                            className="secondary-button load-more-button"
+                            onClick={() => setSelectedThreadLimit((current) => current + THREAD_PAGE_SIZE)}
+                            type="button"
+                          >
+                            Load {Math.min(THREAD_PAGE_SIZE, selectedVisibleThread.length - selectedVisibleThreadPage.length)} more rows
+                          </button>
                         ) : null}
                       </div>
                     </article>
                   </div>
 
-                  <article className="subpanel">
-                    <h3>Missing thread candidates</h3>
-                    <div className="stack-list compact-stack">
-                      {missingChatContacts.slice(0, 5).map((contact) => (
-                        <button
-                          className="list-button"
-                          key={contact.name}
-                          onClick={() => openContactModal(contact.name)}
-                          type="button"
-                        >
-                          <div className="list-head">
-                            <strong>{contact.name}</strong>
-                            <span>{contact.searchCount} search / {contact.friendEventCount} friend</span>
-                          </div>
-                          <p>No chat rows were recovered for this contact.</p>
-                        </button>
-                      ))}
-                      {missingChatContacts.length === 0 ? (
-                        <p className="empty-state">No missing-thread contacts detected.</p>
-                      ) : null}
-                    </div>
-                  </article>
+                  <aside className="facebook-data-stack">
+                    <SectionHeader
+                      eyebrow="Data log"
+                      subtitle="Recovered dates, evidence gaps, and return traces from the Facebook export."
+                      title="Message history and traces"
+                    />
+                    <div className="detail-duo-grid">
+                      <article className="subpanel">
+                        <h3>First and last markers</h3>
+                        <div className="stack-list compact-stack">
+                          {selectedDateMarkers.map((marker) => (
+                            <button
+                              className="list-button"
+                              key={`${marker.label}-${marker.event.id}`}
+                              onClick={() => setModalState({ type: 'event', eventId: marker.event.id })}
+                              type="button"
+                            >
+                              <div className="list-head">
+                                <strong>{marker.label}</strong>
+                                <span>{formatDate(marker.event.timestamp)}</span>
+                              </div>
+                              <p>{eventSummaryText(marker.event)}</p>
+                            </button>
+                          ))}
+                          {selectedDateMarkers.length === 0 ? (
+                            <p className="empty-state">No dated rows were recovered for this contact.</p>
+                          ) : null}
+                        </div>
+                      </article>
 
-                  <article className="subpanel">
-                    <h3>Deletion and return traces</h3>
-                    <div className="stack-list compact-stack">
-                      {yearComparison?.reappeared.slice(0, 5).map((entry) => (
-                        <button
-                          className="list-button"
-                          key={`${entry.contact}-${entry.previousYear}`}
-                          onClick={() => openContactModal(entry.contact)}
-                          type="button"
-                        >
-                          <div className="list-head">
-                            <strong>{entry.contact}</strong>
-                            <span>gap {entry.gap} year(s)</span>
-                          </div>
-                          <p>
-                            Reappeared in {yearComparison.selectedYear} after last being seen in {entry.previousYear}.{' '}
-                            {entry.deletionIndicators > 0 ? `${entry.deletionIndicators} deletion cue(s) in the contact trace.` : 'No direct deletion cue was parsed.'}
-                          </p>
-                        </button>
-                      ))}
-                      {yearComparison && yearComparison.reappeared.length === 0 ? (
-                        <p className="empty-state">No gap-based reappearances were detected for the selected comparison.</p>
-                      ) : null}
-                      {!yearComparison ? (
-                        <p className="empty-state">Pick a selected year and comparison year to surface return traces.</p>
-                      ) : null}
+                      <article className="subpanel">
+                        <h3>Photo and media dates</h3>
+                        <div className="entity-grid compact">
+                          {selectedSourceFiles.map((source) => (
+                            <span className="outline-pill" key={source}>
+                              {source}
+                            </span>
+                          ))}
+                        </div>
+                        <div className="stack-list compact-stack media-stack">
+                          {selectedMediaEvents.map((event) => (
+                            <button
+                              className="list-button"
+                              key={event.id}
+                              onClick={() => setModalState({ type: 'event', eventId: event.id })}
+                              type="button"
+                            >
+                              <div className="list-head">
+                                <strong>{formatDate(event.timestamp)}</strong>
+                                <span>{event.category}</span>
+                              </div>
+                              <p>{eventSummaryText(event)}</p>
+                            </button>
+                          ))}
+                          {selectedMediaEvents.length === 0 ? (
+                            <p className="empty-state">No contact-linked photo or media rows were recovered from the current export.</p>
+                          ) : null}
+                        </div>
+                      </article>
                     </div>
-                  </article>
+
+                    <article className="subpanel">
+                      <h3>Missing thread candidates</h3>
+                      <div className="stack-list compact-stack">
+                        {missingChatContacts.slice(0, 5).map((contact) => (
+                          <button
+                            className="list-button"
+                            key={contact.name}
+                            onClick={() => openContactModal(contact.name)}
+                            type="button"
+                          >
+                            <div className="list-head">
+                              <strong>{contact.name}</strong>
+                              <span>{contact.searchCount} search / {contact.friendEventCount} friend</span>
+                            </div>
+                            <p>No chat rows were recovered for this contact.</p>
+                          </button>
+                        ))}
+                        {missingChatContacts.length === 0 ? (
+                          <p className="empty-state">No missing-thread contacts detected.</p>
+                        ) : null}
+                      </div>
+                    </article>
+
+                    <article className="subpanel">
+                      <h3>Deletion and return traces</h3>
+                      <div className="stack-list compact-stack">
+                        {yearComparison?.reappeared.slice(0, 5).map((entry) => (
+                          <button
+                            className="list-button"
+                            key={`${entry.contact}-${entry.previousYear}`}
+                            onClick={() => openContactModal(entry.contact)}
+                            type="button"
+                          >
+                            <div className="list-head">
+                              <strong>{entry.contact}</strong>
+                              <span>gap {entry.gap} year(s)</span>
+                            </div>
+                            <p>
+                              Reappeared in {yearComparison.selectedYear} after last being seen in {entry.previousYear}.{' '}
+                              {entry.deletionIndicators > 0 ? `${entry.deletionIndicators} deletion cue(s) in the contact trace.` : 'No direct deletion cue was parsed.'}
+                            </p>
+                          </button>
+                        ))}
+                        {yearComparison && yearComparison.reappeared.length === 0 ? (
+                          <p className="empty-state">No gap-based reappearances were detected for the selected comparison.</p>
+                        ) : null}
+                        {!yearComparison ? (
+                          <p className="empty-state">Pick a selected year and comparison year to surface return traces.</p>
+                        ) : null}
+                      </div>
+                    </article>
+                  </aside>
                 </>
               ) : (
-                <p className="empty-state">No contact selected.</p>
+                <p className="empty-state">Choose a Facebook contact to load the message thread and data log.</p>
               )}
             </article>
           </section>

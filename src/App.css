@@ -82,6 +82,71 @@
   grid-template-columns: minmax(320px, 340px) minmax(0, 1fr);
 }
 
+.platform-facebook .chat-preview-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1.18fr) minmax(300px, 360px);
+  gap: 1.1rem;
+  align-items: start;
+}
+
+.platform-facebook .facebook-thread-stack,
+.platform-facebook .facebook-data-stack {
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.platform-facebook .facebook-data-stack {
+  padding-left: 1rem;
+  border-left: 1px solid rgba(121, 168, 255, 0.14);
+}
+
+.platform-facebook .facebook-thread-stack .subpanel,
+.platform-facebook .facebook-data-stack .subpanel {
+  background: rgba(10, 16, 28, 0.9);
+  border-color: rgba(121, 168, 255, 0.15);
+}
+
+.platform-facebook .contact-summary-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.platform-facebook .thread-header-row {
+  align-items: flex-start;
+}
+
+.platform-facebook .message-headline,
+.platform-facebook .message-header-line {
+  align-items: flex-start;
+}
+
+.platform-facebook .message-header-line {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+}
+
+.platform-facebook .transcript-turn {
+  background: rgba(6, 12, 22, 0.94);
+  border-color: rgba(138, 182, 255, 0.18);
+}
+
+.platform-facebook .transcript-turn-head {
+  display: grid;
+  gap: 0.18rem;
+  justify-items: start;
+}
+
+.platform-facebook .transcript-body {
+  line-height: 1.72;
+}
+
+.platform-facebook .message-row.role-self,
+.platform-facebook .message-row.role-contact,
+.platform-facebook .message-row.role-system {
+  width: 100%;
+}
+
 .masthead,
 .toolbar-panel,
 .panel {
@@ -763,14 +828,6 @@
   color: #e4c200;
 }
 
-.platform-facebook .transcript-timestamp {
-  color: #a8c6ff;
-}
-
-.platform-snapchat .transcript-timestamp {
-  color: #e4c200;
-}
-
 .transcript-actor {
   color: #f7fbff;
   font-size: 0.92rem;
@@ -1044,6 +1101,17 @@ mark {
   .top-ai-controls {
     grid-template-columns: 1fr;
   }
+
+  .platform-facebook .chat-preview-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .platform-facebook .facebook-data-stack {
+    padding-left: 0;
+    padding-top: 1rem;
+    border-left: 0;
+    border-top: 1px solid rgba(121, 168, 255, 0.14);
+  }
 }
 
 @media (max-width: 920px) {
@@ -1054,6 +1122,10 @@ mark {
   .top-ai-controls,
   .selector-grid {
     grid-template-columns: 1fr;
+  }
+
+  .platform-facebook .contact-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .top-ai-footer {
@@ -1095,6 +1167,15 @@ mark {
   .message-row.role-contact,
   .message-row.role-system {
     width: 100%;
+  }
+
+  .platform-facebook .contact-summary-grid,
+  .platform-facebook .detail-duo-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .platform-facebook .message-header-line {
+    grid-template-columns: 1fr;
   }
 
   .year-lens-strip {
