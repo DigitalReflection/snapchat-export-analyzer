@@ -1657,6 +1657,7 @@ export default function App() {
     setLastPlatform(platform)
     setSelectedPlatform(platform)
     setPlatformPickerOpen(false)
+    setActiveTab(platform === 'facebook' ? 'chats' : 'overview')
   }
 
   function handleSaveLockCode() {

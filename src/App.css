@@ -4,6 +4,13 @@
   padding: 1rem;
 }
 
+.platform-facebook {
+  background:
+    radial-gradient(circle at top left, rgba(66, 133, 244, 0.12), transparent 24%),
+    radial-gradient(circle at top right, rgba(24, 119, 242, 0.08), transparent 20%),
+    linear-gradient(180deg, #050810 0%, #0a1321 46%, #050810 100%);
+}
+
 .masthead,
 .toolbar-panel,
 .panel,
@@ -69,6 +76,10 @@
   grid-template-columns: minmax(320px, 380px) minmax(0, 1fr);
   gap: 1rem;
   align-items: start;
+}
+
+.platform-facebook .chat-layout {
+  grid-template-columns: minmax(320px, 340px) minmax(0, 1fr);
 }
 
 .masthead,
@@ -421,6 +432,11 @@
   max-height: calc(100vh - 2rem);
 }
 
+.platform-facebook .chat-sidebar {
+  border-color: rgba(121, 168, 255, 0.2);
+  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.3);
+}
+
 .detail-duo-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
@@ -555,10 +571,19 @@
   width: min(82%, 100%);
 }
 
+.platform-facebook .message-row.role-self {
+  width: min(88%, 100%);
+}
+
 .message-row.role-contact,
 .message-row.role-system {
   justify-self: start;
   width: min(82%, 100%);
+}
+
+.platform-facebook .message-row.role-contact,
+.platform-facebook .message-row.role-system {
+  width: min(88%, 100%);
 }
 
 .message-headline {
@@ -568,6 +593,10 @@
   align-items: center;
   color: #98adc2;
   font-size: 0.8rem;
+}
+
+.platform-facebook .message-headline {
+  color: #c2d4ef;
 }
 
 .message-timestamp {
@@ -597,9 +626,34 @@
   white-space: nowrap;
 }
 
+.message-header-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.6rem;
+  align-items: center;
+}
+
+.message-time {
+  color: #9ab6d0;
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
 .message-row.role-self .message-bubble {
   background: linear-gradient(180deg, rgba(17, 42, 33, 0.96), rgba(11, 29, 22, 0.94));
   border-color: rgba(92, 255, 186, 0.2);
+}
+
+.platform-facebook .message-row.role-self .message-bubble {
+  background: linear-gradient(180deg, #1f65f1, #0f3c9c);
+  border-color: rgba(138, 182, 255, 0.42);
+  color: #ecf3ff;
+}
+
+.platform-facebook .message-row.role-contact .message-bubble,
+.platform-facebook .message-row.role-system .message-bubble {
+  background: linear-gradient(180deg, rgba(16, 22, 34, 0.96), rgba(13, 17, 26, 0.94));
+  border-color: rgba(138, 182, 255, 0.16);
 }
 
 .platform-facebook .message-row.role-self .message-bubble {
@@ -641,6 +695,10 @@
   color: #7fe3ff;
 }
 
+.platform-facebook .message-actor {
+  color: #dbe7ff;
+}
+
 .message-copy {
   display: grid;
   gap: 0.7rem;
@@ -663,6 +721,10 @@
   border-radius: 14px;
   border: 1px solid rgba(111, 255, 190, 0.14);
   background: rgba(5, 10, 16, 0.88);
+}
+
+.platform-facebook .transcript-turn {
+  border-color: rgba(138, 182, 255, 0.16);
 }
 
 .transcript-turn-head {
@@ -701,9 +763,22 @@
   color: #e4c200;
 }
 
+.platform-facebook .transcript-timestamp {
+  color: #a8c6ff;
+}
+
+.platform-snapchat .transcript-timestamp {
+  color: #e4c200;
+}
+
 .transcript-actor {
   color: #f7fbff;
   font-size: 0.92rem;
+}
+
+.platform-facebook .thread-scroll,
+.platform-facebook .main-thread-scroll {
+  max-height: 70vh;
 }
 
 .transcript-body {
