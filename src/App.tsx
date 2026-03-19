@@ -1486,10 +1486,32 @@ export default function App() {
   const selectedThread = useMemo(() => {
     if (!selectedSummary) return []
     if (selectedPlatform === 'snapchat') {
-      // Snapchat chat exports often store each side of the same conversation in the
-      // same source file but with different sender/contact values. Group by source
-      // file so both sides stay in one readable thread.
-      return scopedEvents.filter((event) => selectedThreadSourceFiles.has(event.sourceFile))
+      const seedEvents = scopedEvents.filter((event) => selectedThreadSourceFiles.has(event.sourceFile))
+      if (!seedEvents.length) {
+        return scopedEventsByContact.get(selectedSummary.name) ?? []
+      }
+
+      const chatSeed = seedEvents.filter((event) => event.category === 'chat' && event.timestamp)
+      const timestamps = chatSeed
+        .map((event) => Date.parse(event.timestamp ?? ''))
+        .filter((value) => Number.isFinite(value))
+
+      if (!timestamps.length) {
+        return seedEvents
+      }
+
+      const windowPaddingMs = 4 * 60 * 60 * 1000
+      const windowStart = Math.min(...timestamps) - windowPaddingMs
+      const windowEnd = Math.max(...timestamps) + windowPaddingMs
+      const seedUploads = new Set(seedEvents.map((event) => event.uploadId))
+      const expanded = scopedEvents.filter((event) => {
+        if (!seedUploads.has(event.uploadId)) return false
+        if (event.category !== 'chat' || !event.timestamp) return false
+        const time = Date.parse(event.timestamp)
+        return Number.isFinite(time) && time >= windowStart && time <= windowEnd
+      })
+
+      return [...new Map([...seedEvents, ...expanded].map((event) => [event.id, event] as const)).values()]
     }
 
     return scopedEventsByContact.get(selectedSummary.name) ?? []
