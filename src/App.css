@@ -788,6 +788,17 @@
   background: rgba(5, 10, 16, 0.88);
 }
 
+.transcript-turn.role-self {
+  justify-self: end;
+  width: min(88%, 100%);
+}
+
+.transcript-turn.role-contact,
+.transcript-turn.role-system {
+  justify-self: start;
+  width: min(88%, 100%);
+}
+
 .platform-facebook .transcript-turn {
   border-color: rgba(138, 182, 255, 0.16);
 }
@@ -951,6 +962,10 @@
   overflow: hidden;
 }
 
+.modal-shell.chat-focus-modal {
+  width: min(1020px, 100%);
+}
+
 .modal-header {
   padding: 1rem 1.15rem;
   border-bottom: 1px solid rgba(111, 255, 190, 0.12);
@@ -959,6 +974,80 @@
 .modal-body {
   padding: 1rem 1.15rem 1.15rem;
   overflow: auto;
+}
+
+.chat-focus-modal .modal-body {
+  padding-top: 0.9rem;
+}
+
+.chat-focus-modal .message-headline,
+.chat-focus-modal .message-source-line {
+  display: none;
+}
+
+.chat-focus-modal .message-row {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  width: 100%;
+  justify-self: stretch;
+}
+
+.modal-shell.chat-focus-modal .message-row.role-self,
+.modal-shell.chat-focus-modal .message-row.role-contact,
+.modal-shell.chat-focus-modal .message-row.role-system {
+  width: 100%;
+}
+
+.chat-focus-modal .message-row:hover {
+  transform: none;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.chat-focus-modal .message-bubble {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.chat-focus-modal .message-copy {
+  gap: 0.5rem;
+}
+
+.chat-focus-modal .transcript-stream {
+  gap: 0.7rem;
+}
+
+.chat-focus-modal .transcript-turn {
+  max-width: 100%;
+  padding: 0.95rem 1rem;
+}
+
+.chat-focus-modal .transcript-turn.role-self {
+  justify-self: end;
+  border-color: rgba(138, 182, 255, 0.22);
+  background: linear-gradient(180deg, rgba(28, 83, 217, 0.96), rgba(18, 54, 150, 0.94));
+}
+
+.chat-focus-modal .transcript-turn.role-contact,
+.chat-focus-modal .transcript-turn.role-system {
+  justify-self: start;
+}
+
+.chat-focus-modal .chat-focus-scroll,
+.chat-focus-modal .main-thread-scroll {
+  max-height: calc(100vh - 15rem);
+}
+
+.chat-focus-modal .thread-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 0.7rem 0;
+  background: linear-gradient(180deg, rgba(7, 11, 18, 0.98), rgba(7, 11, 18, 0.82));
+  backdrop-filter: blur(10px);
 }
 
 .modal-grid.two-column {

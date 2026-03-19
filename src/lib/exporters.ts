@@ -38,6 +38,10 @@ export function downloadPlainText(filename: string, content: string) {
   download(filename, content, 'text/plain;charset=utf-8')
 }
 
+export function downloadHtml(filename: string, content: string) {
+  download(filename, content, 'text/html;charset=utf-8')
+}
+
 export function downloadEventsJson(events: NormalizedEvent[]) {
   download(
     'communication-events.json',

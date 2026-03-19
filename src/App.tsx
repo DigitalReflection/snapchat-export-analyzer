@@ -25,6 +25,7 @@ import { runAIReview, runContactAIReview } from './lib/ai'
 import {
   downloadContactsCsv,
   downloadEventsJson,
+  downloadHtml,
   downloadKeywordHitsCsv,
   downloadPlainText,
   downloadWorkspaceReport,
@@ -44,6 +45,7 @@ type MetricKey = 'contacts' | 'threads' | 'missing' | 'deletions' | 'timing' | '
 
 type ModalState =
   | { type: 'contact'; contactName: string }
+  | { type: 'thread-focus'; contactName: string }
   | { type: 'event'; eventId: string }
   | { type: 'signal'; signalId: string }
   | { type: 'upload'; uploadId: string }
@@ -497,6 +499,189 @@ function buildReadableTranscript(events: NormalizedEvent[], aliasIndex: Map<stri
     .join('\n')
 }
 
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+function buildChatExportHtml(
+  title: string,
+  events: NormalizedEvent[],
+  aliasIndex: Map<string, Set<string>>,
+  platform: Platform,
+) {
+  const start = events[0]?.timestamp ? formatDate(events[0].timestamp) : 'Unknown'
+  const end = events[events.length - 1]?.timestamp ? formatDate(events[events.length - 1].timestamp) : 'Unknown'
+  const cards = events
+    .map((event) => {
+      const role = resolveConversationRole(event, aliasIndex)
+      const actor = extractActorValue(event) ?? (role === 'self' ? 'You' : event.contact ?? 'Unknown')
+      const timestamp = formatThreadTimestamp(event.timestamp)
+      const raw = eventConversationText(event) || eventSummaryText(event)
+      const blocks =
+        platform === 'facebook'
+          ? parseFacebookTranscriptBlocks(raw)
+          : splitReadableTranscript(raw)
+      const body =
+        blocks.length > 0
+          ? blocks
+              .map(
+                (block) => `
+                  <section class="chat-turn role-${role}">
+                    <div class="chat-turn-head">
+                      ${block.timestamp ? `<span class="chat-turn-time">${escapeHtml(block.timestamp)}</span>` : ''}
+                      ${block.actor ? `<strong class="chat-turn-actor">${escapeHtml(block.actor)}</strong>` : ''}
+                    </div>
+                    <div class="chat-turn-body">${escapeHtml(block.text).replace(/\n/g, '<br />')}</div>
+                  </section>
+                `,
+              )
+              .join('')
+          : `
+            <div class="chat-turn role-${role}">
+              <div class="chat-turn-body">${escapeHtml(raw || 'No readable chat text was recovered.').replace(/\n/g, '<br />')}</div>
+            </div>
+          `
+
+      return `
+        <article class="chat-card role-${role}">
+          <div class="chat-card-head">
+            <strong>${escapeHtml(actor)}</strong>
+            <span>${escapeHtml(timestamp)}${event.category ? ` · ${escapeHtml(event.category)}` : ''}</span>
+          </div>
+          ${body}
+        </article>
+      `
+    })
+    .join('')
+
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>${escapeHtml(title)} - chat export</title>
+    <style>
+      :root { color-scheme: dark; }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: Inter, Segoe UI, Arial, sans-serif;
+        background: #070b12;
+        color: #edf4ff;
+      }
+      .page {
+        max-width: 980px;
+        margin: 0 auto;
+        padding: 24px;
+      }
+      .hero {
+        display: grid;
+        gap: 8px;
+        margin-bottom: 18px;
+      }
+      .hero h1 {
+        margin: 0;
+        font-size: 28px;
+      }
+      .hero p {
+        margin: 0;
+        color: #97adc7;
+      }
+      .chat-list {
+        display: grid;
+        gap: 12px;
+      }
+      .chat-card {
+        display: grid;
+        gap: 10px;
+        padding: 14px 16px;
+        border-radius: 18px;
+        border: 1px solid rgba(138, 182, 255, 0.18);
+        background: linear-gradient(180deg, rgba(13, 19, 31, 0.96), rgba(8, 14, 24, 0.96));
+        box-shadow: 0 18px 32px rgba(0, 0, 0, 0.24);
+      }
+      .chat-card.role-self {
+        background: linear-gradient(180deg, rgba(28, 83, 217, 0.95), rgba(18, 54, 150, 0.94));
+        border-color: rgba(138, 182, 255, 0.34);
+      }
+      .chat-card-head {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        align-items: center;
+        font-size: 14px;
+        color: #d0dcf0;
+      }
+      .chat-card-head strong {
+        font-size: 15px;
+        color: inherit;
+      }
+      .chat-card-head span {
+        color: #9ab2cf;
+        text-align: right;
+      }
+      .chat-turn {
+        display: grid;
+        gap: 8px;
+        padding: 12px 14px;
+        border-radius: 16px;
+        border: 1px solid rgba(138, 182, 255, 0.16);
+        background: rgba(6, 10, 18, 0.88);
+      }
+      .chat-turn.role-self {
+        background: rgba(255, 255, 255, 0.12);
+      }
+      .chat-turn-head {
+        display: grid;
+        gap: 4px;
+      }
+      .chat-turn-time {
+        font-size: 12px;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: #a8c6ff;
+      }
+      .chat-turn-actor {
+        font-size: 14px;
+        color: #eff5ff;
+      }
+      .chat-turn-body {
+        white-space: pre-wrap;
+        line-height: 1.65;
+        overflow-wrap: anywhere;
+        word-break: break-word;
+      }
+      @media print {
+        body { background: #fff; color: #111; }
+        .page { max-width: none; padding: 0; }
+        .chat-card, .chat-turn { break-inside: avoid; page-break-inside: avoid; }
+      }
+      @media (max-width: 720px) {
+        .page { padding: 14px; }
+        .chat-card-head { flex-direction: column; align-items: flex-start; }
+        .chat-card-head span { text-align: left; }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <header class="hero">
+        <h1>${escapeHtml(title)}</h1>
+        <p>${escapeHtml(start)} to ${escapeHtml(end)} · ${events.length} visible row(s)</p>
+      </header>
+      <section class="chat-list">
+        ${cards || '<p>No readable chat text was recovered for this export.</p>'}
+      </section>
+    </main>
+  </body>
+</html>`
+}
+
 function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
@@ -756,7 +941,7 @@ function ConversationList(props: {
                 {props.plainTextOnly && transcriptBlocks.length > 0 ? (
                   <div className="transcript-stream">
                     {transcriptBlocks.map((block, blockIndex) => (
-                      <div className="transcript-turn" key={`${event.id}-${blockIndex}`}>
+                      <div className={`transcript-turn role-${role}`} key={`${event.id}-${blockIndex}`}>
                         <div className="transcript-turn-head">
                           {block.timestamp ? <span className="transcript-timestamp">{block.timestamp}</span> : null}
                           <strong className="transcript-actor">{block.actor ?? actorLabel}</strong>
@@ -887,12 +1072,13 @@ function DetailModal(props: {
   subtitle?: string
   onClose: () => void
   children: ReactNode
+  className?: string
 }) {
   return (
     <div className="modal-backdrop" onClick={props.onClose} role="presentation">
       <section
         aria-modal="true"
-        className="modal-shell"
+        className={`modal-shell ${props.className ?? ''}`.trim()}
         onClick={(event) => event.stopPropagation()}
         role="dialog"
       >
@@ -1378,6 +1564,16 @@ export default function App() {
     )
   }
 
+  function handleDownloadSelectedTranscriptHtml() {
+    if (!selectedSummary) return
+
+    const html = buildChatExportHtml(selectedSummary.name, selectedVisibleThread, aliasIndex, selectedPlatform ?? 'snapchat')
+    downloadHtml(
+      `${selectedSummary.name.replace(/[^\w.-]+/g, '_').slice(0, 60) || 'thread'}-transcript.html`,
+      html,
+    )
+  }
+
   const selectedDateMarkers = useMemo(() => buildDateMarkers(selectedThread), [selectedThread])
   const selectedMediaEvents = useMemo(
     () => selectedThread.filter((event) => isMediaEvent(event)),
@@ -1711,15 +1907,22 @@ export default function App() {
     setModalState({ type: 'contact', contactName })
   }
 
+  function openContactFocusModal(contactName: string) {
+    setSelectedContact(contactName)
+    setThreadSearch('')
+    setThreadMode('chat')
+    setModalState({ type: 'thread-focus', contactName })
+  }
+
   function moveModalContact(direction: -1 | 1) {
-    if (!modalState || modalState.type !== 'contact') return
+    if (!modalState || (modalState.type !== 'contact' && modalState.type !== 'thread-focus')) return
     const names = (filteredContacts.length ? filteredContacts : workspace.contacts).map((contact) => contact.name)
     const index = names.indexOf(modalState.contactName)
     if (index < 0) return
     const nextName = names[(index + direction + names.length) % names.length]
     setSelectedContact(nextName)
     setThreadSearch('')
-    setModalState({ type: 'contact', contactName: nextName })
+    setModalState({ type: modalState.type, contactName: nextName })
   }
 
   function renderMetricModal(key: MetricKey) {
@@ -1929,9 +2132,10 @@ export default function App() {
       return renderMetricModal(modalState.key)
     }
 
-    if (modalState.type === 'contact') {
+    if (modalState.type === 'contact' || modalState.type === 'thread-focus') {
       const summary = contactIndex.get(modalState.contactName)
       if (!summary) return null
+      const isFocus = modalState.type === 'thread-focus'
       const thread = scopedEventsByContact.get(summary.name) ?? []
       const orderedThread = sortThreadEvents(thread, threadSort)
       const dateMarkers = buildDateMarkers(orderedThread)
@@ -1952,23 +2156,123 @@ export default function App() {
         .slice(0, 12)
       const contactHits = workspace.keywordHits.filter((hit) => hit.contact === summary.name)
 
+      if (isFocus) {
+        return (
+          <DetailModal
+            className="chat-focus-modal"
+            onClose={() => setModalState(null)}
+            subtitle="Chat-only transcript view for screenshots and exports."
+            title={summary.name}
+          >
+            <div className="modal-toolbar">
+              <div className="button-row">
+                <button className="ghost-button" onClick={() => moveModalContact(-1)} type="button">
+                  Prev contact
+                </button>
+                <button className="ghost-button" onClick={() => moveModalContact(1)} type="button">
+                  Next contact
+                </button>
+                <button className="secondary-button" onClick={() => setModalState({ type: 'contact', contactName: summary.name })} type="button">
+                  Full details
+                </button>
+              </div>
+              <div className="button-row">
+                <button className="ghost-button" onClick={handleDownloadSelectedTranscript} type="button">
+                  Download TXT
+                </button>
+                <button className="ghost-button" onClick={handleDownloadSelectedTranscriptHtml} type="button">
+                  Download HTML
+                </button>
+              </div>
+            </div>
+
+            <div className="thread-toolbar">
+              <div className="button-row">
+                <button
+                  className={threadSort === 'newest' ? 'tab-button active' : 'tab-button'}
+                  onClick={() => setThreadSort('newest')}
+                  type="button"
+                >
+                  Newest first
+                </button>
+                <button
+                  className={threadSort === 'oldest' ? 'tab-button active' : 'tab-button'}
+                  onClick={() => setThreadSort('oldest')}
+                  type="button"
+                >
+                  Oldest first
+                </button>
+                <button
+                  className={threadMode === 'chat' ? 'tab-button active' : 'tab-button'}
+                  onClick={() => setThreadMode('chat')}
+                  type="button"
+                >
+                  Chat only
+                </button>
+                <button
+                  className={threadMode === 'all' ? 'tab-button active' : 'tab-button'}
+                  onClick={() => setThreadMode('all')}
+                  type="button"
+                >
+                  All linked rows
+                </button>
+              </div>
+              <label className="search-field inline-search">
+                <span>Find inside this thread</span>
+                <input
+                  onChange={(event) => setThreadSearch(event.target.value)}
+                  placeholder="Name, phrase, address, delete..."
+                  type="search"
+                  value={threadSearch}
+                />
+              </label>
+            </div>
+
+            <div className="thread-scroll chat-focus-scroll main-thread-scroll">
+              <ConversationList
+                aliasIndex={aliasIndex}
+                events={visibleThreadPage}
+                onEventClick={(eventId) => setModalState({ type: 'event', eventId })}
+                plainTextOnly={threadMode === 'chat'}
+                sortOrder={threadSort}
+                platform={selectedPlatform ?? 'snapchat'}
+                terms={modalTerms}
+              />
+              {visibleThread.length === 0 ? <p className="empty-state">No rows matched the current thread filter.</p> : null}
+              {visibleThread.length > visibleThreadPage.length ? (
+                <button
+                  className="secondary-button load-more-button"
+                  onClick={() => setModalThreadLimit((current) => current + THREAD_PAGE_SIZE)}
+                  type="button"
+                >
+                  Load {Math.min(THREAD_PAGE_SIZE, visibleThread.length - visibleThreadPage.length)} more rows
+                </button>
+              ) : null}
+            </div>
+          </DetailModal>
+        )
+      }
+
       return (
         <DetailModal
           onClose={() => setModalState(null)}
           subtitle="Full thread view with every parsed row linked to this contact."
           title={summary.name}
         >
-          <div className="modal-toolbar">
-            <div className="button-row">
-              <button className="ghost-button" onClick={() => moveModalContact(-1)} type="button">
-                Prev contact
-              </button>
-              <button className="ghost-button" onClick={() => moveModalContact(1)} type="button">
-                Next contact
-              </button>
-            </div>
-            <div className="button-row">
-              {(['male', 'female', 'unknown'] as ContactLabel[]).map((label) => (
+            <div className="modal-toolbar">
+              <div className="button-row">
+                <button className="ghost-button" onClick={() => moveModalContact(-1)} type="button">
+                  Prev contact
+                </button>
+                <button className="ghost-button" onClick={() => moveModalContact(1)} type="button">
+                  Next contact
+                </button>
+                <button className="secondary-button" onClick={() => setModalState({ type: 'thread-focus', contactName: summary.name })} type="button">
+                  Chat focus
+                </button>
+              </div>
+              <div className="button-row">
+                {(['male', 'female', 'unknown'] as ContactLabel[]).map((label) => (
                 <button
                   className={
                     (contactLabels[summary.name] ?? 'unknown') === label
@@ -3025,11 +3329,17 @@ export default function App() {
                           {label}
                         </button>
                       ))}
+                      <button className="secondary-button" onClick={() => openContactFocusModal(selectedSummary.name)} type="button">
+                        Chat focus
+                      </button>
                       <button className="secondary-button" onClick={handleSelectedContactAiRun} type="button">
                         {isContactAiLoading ? 'AI organizing...' : 'Organize with AI'}
                       </button>
                       <button className="ghost-button" onClick={handleDownloadSelectedTranscript} type="button">
                         Download TXT
+                      </button>
+                      <button className="ghost-button" onClick={handleDownloadSelectedTranscriptHtml} type="button">
+                        Download HTML
                       </button>
                     </div>
 
