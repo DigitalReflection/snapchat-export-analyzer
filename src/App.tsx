@@ -1345,6 +1345,23 @@ export default function App() {
   )
   const selectedThreadLatestEvent = selectedThreadNewestFirst[0] ?? null
   const selectedThreadOldestEvent = selectedThreadOldestFirst[0] ?? null
+  const selectedContactYears = useMemo(
+    () => (selectedSummary ? contactYearHistory.get(selectedSummary.name) ?? [] : []),
+    [contactYearHistory, selectedSummary],
+  )
+  const selectedContactYearGaps = useMemo(() => {
+    if (selectedContactYears.length < 2) return []
+    const gaps: Array<{ start: number; end: number; span: number }> = []
+    for (let index = 1; index < selectedContactYears.length; index += 1) {
+      const prev = selectedContactYears[index - 1]
+      const current = selectedContactYears[index]
+      const span = current - prev
+      if (span > 1) {
+        gaps.push({ start: prev, end: current, span })
+      }
+    }
+    return gaps
+  }, [selectedContactYears])
   const contactAiProgressPercent = useMemo(
     () => clampPercent((contactAiProgress.completed / Math.max(contactAiProgress.total, 1)) * 100),
     [contactAiProgress],
@@ -2920,6 +2937,14 @@ export default function App() {
                     <article className="mini-stat">
                       <span>Oldest sent</span>
                       <strong>{formatThreadTimestamp(selectedThreadOldestEvent?.timestamp ?? null)}</strong>
+                    </article>
+                    <article className="mini-stat">
+                      <span>Year coverage</span>
+                      <strong>{selectedContactYears.length ? selectedContactYears.join(', ') : 'Unknown'}</strong>
+                    </article>
+                    <article className="mini-stat">
+                      <span>Gaps &gt;1y</span>
+                      <strong>{selectedContactYearGaps.length}</strong>
                     </article>
                   </div>
 
