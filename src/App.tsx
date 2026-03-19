@@ -1504,10 +1504,22 @@ export default function App() {
     workspace.contacts[0] ??
     null
 
+  const selectedThreadSourceFiles = useMemo(() => {
+    if (!selectedSummary) return new Set<string>()
+    return new Set((scopedEventsByContact.get(selectedSummary.name) ?? []).map((event) => event.sourceFile))
+  }, [scopedEventsByContact, selectedSummary])
+
   const selectedThread = useMemo(() => {
     if (!selectedSummary) return []
+    if (selectedPlatform === 'snapchat') {
+      // Snapchat chat exports often store each side of the same conversation in the
+      // same source file but with different sender/contact values. Group by source
+      // file so both sides stay in one readable thread.
+      return scopedEvents.filter((event) => selectedThreadSourceFiles.has(event.sourceFile))
+    }
+
     return scopedEventsByContact.get(selectedSummary.name) ?? []
-  }, [scopedEventsByContact, selectedSummary])
+  }, [scopedEvents, scopedEventsByContact, selectedPlatform, selectedSummary, selectedThreadSourceFiles])
   const selectedThreadSorted = useMemo(
     () => sortThreadEvents(selectedThread, threadSort),
     [selectedThread, threadSort],
