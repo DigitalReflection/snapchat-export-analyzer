@@ -550,6 +550,26 @@
 .platform-facebook .chat-sidebar {
   border-color: rgba(121, 168, 255, 0.2);
   box-shadow: 0 16px 34px rgba(0, 0, 0, 0.3);
+  grid-template-rows: auto auto auto auto auto minmax(0, 1fr);
+  max-height: calc(100vh - 2rem);
+  overflow: hidden;
+  min-height: 0;
+}
+
+.platform-facebook .chat-sidebar .compact-subpanel {
+  min-height: 0;
+}
+
+.platform-facebook .chat-sidebar .review-strip {
+  max-height: 220px;
+  overflow: auto;
+}
+
+.platform-facebook .chat-sidebar .contact-table {
+  max-height: none;
+  min-height: 0;
+  height: 100%;
+  overflow: auto;
 }
 
 .detail-duo-grid {
