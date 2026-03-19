@@ -260,14 +260,13 @@ function messageDetailFromRecord(record: Record<string, unknown>) {
 function buildMessageContact(
   title: string | null,
   participants: string[],
-  senderName: string | null,
 ) {
   if (title && title.trim()) return title.trim()
 
-  const filtered = participants.filter((name) => name && name !== senderName)
-  if (filtered.length === 1) return filtered[0]
-  if (filtered.length > 1) return filtered.join(', ')
-  return senderName ?? 'Messenger thread'
+  const uniqueParticipants = [...new Set(participants.filter((name) => name && name.trim()))]
+  if (uniqueParticipants.length === 1) return uniqueParticipants[0]
+  if (uniqueParticipants.length > 1) return uniqueParticipants.sort((left, right) => left.localeCompare(right)).join(' & ')
+  return 'Messenger thread'
 }
 
 function parseFacebookMessages(
@@ -293,7 +292,7 @@ function parseFacebookMessages(
     const detail = messageDetailFromRecord(message)
     if (!text && !detail) return
 
-    const contact = buildMessageContact(title, participants, senderName)
+    const contact = buildMessageContact(title, participants)
     const subtype = Array.isArray(message.reactions) && message.reactions.length ? 'message with reactions' : 'message'
 
     events.push({
@@ -315,6 +314,7 @@ function parseFacebookMessages(
       attributes: {
         sender_name: senderName,
         thread_title: title,
+        participants: participants.join(' | '),
         timestamp_ms: typeof message.timestamp_ms === 'number' ? message.timestamp_ms : null,
       },
     })
