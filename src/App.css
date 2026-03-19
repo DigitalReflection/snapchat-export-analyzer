@@ -589,6 +589,33 @@
   border-color: rgba(92, 255, 186, 0.2);
 }
 
+.platform-facebook .message-row.role-self .message-bubble {
+  background: linear-gradient(180deg, rgba(28, 83, 217, 0.96), rgba(18, 54, 150, 0.94));
+  border-color: rgba(138, 182, 255, 0.32);
+}
+
+.platform-facebook .message-row.role-contact .message-bubble,
+.platform-facebook .message-row.role-system .message-bubble {
+  background: linear-gradient(180deg, rgba(18, 24, 38, 0.94), rgba(15, 20, 33, 0.92));
+  border-color: rgba(138, 182, 255, 0.18);
+}
+
+.platform-snapchat .message-row.role-self .message-bubble {
+  background: linear-gradient(180deg, rgba(255, 228, 92, 0.95), rgba(231, 192, 48, 0.93));
+  color: #0c0c0c;
+  border-color: rgba(255, 214, 64, 0.6);
+}
+
+.platform-snapchat .message-row.role-self .message-actor {
+  color: #0c0c0c;
+}
+
+.platform-snapchat .message-row.role-contact .message-bubble,
+.platform-snapchat .message-row.role-system .message-bubble {
+  background: linear-gradient(180deg, rgba(16, 18, 24, 0.96), rgba(12, 14, 20, 0.94));
+  border-color: rgba(255, 214, 64, 0.18);
+}
+
 .message-row.role-system .message-bubble {
   background: linear-gradient(180deg, rgba(20, 24, 33, 0.96), rgba(16, 20, 29, 0.94));
   border-color: rgba(142, 201, 255, 0.18);
@@ -651,6 +678,14 @@
   font-size: 0.76rem;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+}
+
+.platform-facebook .transcript-timestamp {
+  color: #a8c6ff;
+}
+
+.platform-snapchat .transcript-timestamp {
+  color: #e4c200;
 }
 
 .transcript-actor {

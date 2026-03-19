@@ -901,6 +901,7 @@ export default function App() {
   const workspaceWorkerRef = useRef<Worker | null>(null)
   const workspaceRequestRef = useRef(0)
   const viewerConfig = selectedPlatform ? PLATFORM_CONFIG[selectedPlatform] : null
+  const platformClass = selectedPlatform ? `platform-${selectedPlatform}` : ''
 
   const deferredContactSearch = useDeferredValue(contactSearch)
   const deferredSearchQuery = useDeferredValue(searchQuery)
@@ -2287,7 +2288,7 @@ export default function App() {
 
   if (!selectedPlatform || platformPickerOpen) {
     return (
-      <main className="app-shell">
+      <main className={`app-shell ${platformClass}`}>
         <section className="panel selector-panel">
           <div>
             <p className="eyebrow">Viewer selection</p>
@@ -2329,7 +2330,7 @@ export default function App() {
 
   if (isLocked) {
     return (
-      <main className="app-shell">
+      <main className={`app-shell ${platformClass}`}>
         <section className="panel lock-panel">
           <div>
             <p className="eyebrow">Private workspace lock</p>
@@ -2365,8 +2366,8 @@ export default function App() {
 
   return (
     <>
-      <main className="app-shell">
-        <header className="masthead">
+    <main className={`app-shell ${platformClass}`}>
+      <header className="masthead">
           <div>
             <p className="eyebrow">Kali-style communication intelligence / {viewerConfig?.label}</p>
             <h1>{viewerConfig?.heroTitle ?? 'Export Viewer Pro'}</h1>
@@ -3018,12 +3019,12 @@ export default function App() {
                   </article>
 
                   <article className="subpanel">
-                    <div className="thread-header-row">
-                      <h3>Parsed thread</h3>
-                      <div className="button-row">
-                        <button
-                          className={threadSort === 'newest' ? 'tab-button active' : 'tab-button'}
-                          onClick={() => setThreadSort('newest')}
+            <div className="thread-header-row">
+              <h3>Parsed thread</h3>
+              <div className="button-row">
+                <button
+                  className={threadSort === 'newest' ? 'tab-button active' : 'tab-button'}
+                  onClick={() => setThreadSort('newest')}
                           type="button"
                         >
                           Newest first
