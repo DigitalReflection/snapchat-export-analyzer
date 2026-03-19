@@ -8,6 +8,7 @@ const SNAPSHOT_KEY = 'workspace'
 export type PersistedSnapshot = {
   uploads: ParsedUpload[]
   contactAiResults: Record<string, AIResult>
+  reviewLaterContacts: string[]
   savedAt: string
 }
 

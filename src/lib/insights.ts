@@ -99,6 +99,22 @@ const TONE_RULES = [
     ],
   },
   {
+    category: 'flirt',
+    label: 'Flirt indicators',
+    phrases: [
+      'babe',
+      'baby',
+      'cute',
+      'handsome',
+      'pretty',
+      'thinking of you',
+      'wish you were here',
+      'cant wait to see you',
+      "can't wait to see you",
+      'come over',
+    ],
+  },
+  {
     category: 'secrecy',
     label: 'Secrecy indicators',
     phrases: [
@@ -143,6 +159,10 @@ type InternalContact = {
   name: string
   interactions: number
   messageCount: number
+  selfMessageCount: number
+  contactMessageCount: number
+  selfMediaCount: number
+  contactMediaCount: number
   searchCount: number
   friendEventCount: number
   lateNightInteractions: number
@@ -150,6 +170,8 @@ type InternalContact = {
   activeDays: Set<string>
   firstSeen: string | null
   lastSeen: string | null
+  firstSourceFile: string | null
+  lastSourceFile: string | null
   recentCount: number
   previousCount: number
   deletionIndicators: number
@@ -182,6 +204,59 @@ function normalizeText(value: string | null) {
 
 function compact(text: string) {
   return text.replace(/\s+/g, ' ').trim()
+}
+
+function normalizeAlias(value: string) {
+  return value.toLowerCase().trim()
+}
+
+function extractActorValue(event: NormalizedEvent) {
+  const keys = ['sender', 'sender_name', 'from', 'author', 'participant', 'display_name', 'user', 'username']
+  for (const key of keys) {
+    const value = event.attributes[key]
+    if (typeof value === 'string' && value.trim()) {
+      return value.trim()
+    }
+  }
+  return null
+}
+
+function buildSelfAliasLookup(uploads: ParsedUpload[]) {
+  return new Map(
+    uploads.map((upload) => {
+      const values = [
+        upload.upload.account.username,
+        upload.upload.account.displayName,
+        upload.upload.account.email,
+        upload.upload.account.phone,
+        ...upload.upload.account.aliases,
+      ]
+        .filter((value): value is string => Boolean(value))
+        .map((value) => normalizeAlias(value))
+
+      return [upload.upload.id, new Set(values)] as const
+    }),
+  )
+}
+
+function resolveEventRole(event: NormalizedEvent, selfAliases: Map<string, Set<string>>) {
+  if (event.category !== 'chat') {
+    return 'other' as const
+  }
+
+  const actor = extractActorValue(event)
+  if (!actor) {
+    return 'other' as const
+  }
+
+  const aliases = selfAliases.get(event.uploadId)
+  return aliases?.has(normalizeAlias(actor)) ? ('self' as const) : ('contact' as const)
+}
+
+function isMediaTranscriptEvent(event: NormalizedEvent) {
+  const marker = typeof event.attributes.marker === 'string' ? event.attributes.marker.toUpperCase() : ''
+  const subtype = typeof event.subtype === 'string' ? event.subtype.toLowerCase() : ''
+  return marker === 'MEDIA' || subtype.includes('photo') || subtype.includes('video') || subtype.includes('image')
 }
 
 function clampScore(value: number) {
@@ -444,7 +519,11 @@ function topWeekdayFromCounts(counts: number[]) {
   return topCount > 0 && topDay !== null ? WEEKDAY_LABELS[topDay] : null
 }
 
-function buildContacts(events: NormalizedEvent[], keywordHits: KeywordHit[]) {
+function buildContacts(
+  events: NormalizedEvent[],
+  keywordHits: KeywordHit[],
+  selfAliasesByUpload: Map<string, Set<string>>,
+) {
   const hitsByContact = new Map<string, KeywordHit[]>()
   keywordHits.forEach((hit) => {
     const existing = hitsByContact.get(hit.contact) ?? []
@@ -464,6 +543,10 @@ function buildContacts(events: NormalizedEvent[], keywordHits: KeywordHit[]) {
       name: event.contact,
       interactions: 0,
       messageCount: 0,
+      selfMessageCount: 0,
+      contactMessageCount: 0,
+      selfMediaCount: 0,
+      contactMediaCount: 0,
       searchCount: 0,
       friendEventCount: 0,
       lateNightInteractions: 0,
@@ -471,6 +554,8 @@ function buildContacts(events: NormalizedEvent[], keywordHits: KeywordHit[]) {
       activeDays: new Set<string>(),
       firstSeen: null,
       lastSeen: null,
+      firstSourceFile: null,
+      lastSourceFile: null,
       recentCount: 0,
       previousCount: 0,
       deletionIndicators: 0,
@@ -487,6 +572,20 @@ function buildContacts(events: NormalizedEvent[], keywordHits: KeywordHit[]) {
 
     if (event.category === 'chat') {
       current.messageCount += 1
+      const role = resolveEventRole(event, selfAliasesByUpload)
+      if (role === 'self') {
+        current.selfMessageCount += 1
+      } else {
+        current.contactMessageCount += 1
+      }
+
+      if (isMediaTranscriptEvent(event)) {
+        if (role === 'self') {
+          current.selfMediaCount += 1
+        } else {
+          current.contactMediaCount += 1
+        }
+      }
     }
     if (event.category === 'search') {
       current.searchCount += 1
@@ -533,6 +632,10 @@ function buildContacts(events: NormalizedEvent[], keywordHits: KeywordHit[]) {
     if (!current.lastSeen || date > new Date(current.lastSeen)) {
       current.lastSeen = event.timestamp
     }
+    if (!current.firstSourceFile) {
+      current.firstSourceFile = event.sourceFile
+    }
+    current.lastSourceFile = event.sourceFile
 
     index.set(event.contact, current)
   })
@@ -540,7 +643,7 @@ function buildContacts(events: NormalizedEvent[], keywordHits: KeywordHit[]) {
   return [...index.values()]
     .map((contact): ContactSummary => {
       const hits = hitsByContact.get(contact.name) ?? []
-      const romanticHits = hits.filter((hit) => ['affection', 'planning', 'romantic'].includes(hit.category)).length
+      const flirtHits = hits.filter((hit) => ['affection', 'planning', 'flirt', 'romantic'].includes(hit.category)).length
       const secrecyHits = hits.filter((hit) => hit.category === 'secrecy').length
       const intensityBase =
         contact.messageCount / 4 +
@@ -552,6 +655,10 @@ function buildContacts(events: NormalizedEvent[], keywordHits: KeywordHit[]) {
         name: contact.name,
         interactions: contact.interactions,
         messageCount: contact.messageCount,
+        selfMessageCount: contact.selfMessageCount,
+        contactMessageCount: contact.contactMessageCount,
+        selfMediaCount: contact.selfMediaCount,
+        contactMediaCount: contact.contactMediaCount,
         searchCount: contact.searchCount,
         friendEventCount: contact.friendEventCount,
         lateNightInteractions: contact.lateNightInteractions,
@@ -560,9 +667,11 @@ function buildContacts(events: NormalizedEvent[], keywordHits: KeywordHit[]) {
         activeDays: contact.activeDays.size,
         firstSeen: contact.firstSeen,
         lastSeen: contact.lastSeen,
+        firstSourceFile: contact.firstSourceFile,
+        lastSourceFile: contact.lastSourceFile,
         recentChange: contact.recentCount - contact.previousCount,
         deletionIndicators: contact.deletionIndicators,
-        romanticScore: clampScore(1 + romanticHits * 1.8 + contact.lateNightInteractions * 0.3),
+        romanticScore: clampScore(1 + flirtHits * 1.8 + contact.lateNightInteractions * 0.3),
         secrecyScore: clampScore(1 + secrecyHits * 2.6 + contact.deletionIndicators * 1.8 + Math.max(contact.recentCount - contact.previousCount, 0) * 0.35),
         intensityScore: clampScore(1 + intensityBase),
         missingChat:
@@ -944,7 +1053,7 @@ export function buildWorkspace(uploads: ParsedUpload[]): WorkspaceDataset {
     })
 
   const keywordHits = collectKeywordHits(events)
-  const contacts = buildContacts(events, keywordHits)
+  const contacts = buildContacts(events, keywordHits, buildSelfAliasLookup(uploads))
   const entities = buildEntities(events)
   const repeatedPhrases = buildRepeatedPhrases(events)
   const toneSummaries = buildToneSummaries(keywordHits)
@@ -1003,7 +1112,7 @@ export function buildWorkspaceLite(uploads: ParsedUpload[]): WorkspaceDataset {
       return left.timestamp.localeCompare(right.timestamp)
     })
 
-  const contacts = buildContacts(events, [])
+  const contacts = buildContacts(events, [], buildSelfAliasLookup(uploads))
   const timeline = buildTimeline(events)
   const activitySource = events.filter((event) => event.category === 'chat')
   const { hourBuckets, weekdayBuckets, heatmap } = buildActivityBuckets(

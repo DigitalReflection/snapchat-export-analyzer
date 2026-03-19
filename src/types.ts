@@ -90,6 +90,10 @@ export type ContactSummary = {
   name: string
   interactions: number
   messageCount: number
+  selfMessageCount: number
+  contactMessageCount: number
+  selfMediaCount: number
+  contactMediaCount: number
   searchCount: number
   friendEventCount: number
   lateNightInteractions: number
@@ -98,6 +102,8 @@ export type ContactSummary = {
   activeDays: number
   firstSeen: string | null
   lastSeen: string | null
+  firstSourceFile: string | null
+  lastSourceFile: string | null
   recentChange: number
   deletionIndicators: number
   romanticScore: number

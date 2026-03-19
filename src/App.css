@@ -42,6 +42,16 @@
   align-items: flex-start;
 }
 
+.list-head {
+  min-width: 0;
+}
+
+.list-head strong,
+.mini-stat strong {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
 .button-row,
 .hero-pills,
 .group-tabs,
@@ -477,6 +487,46 @@
 
 .contact-row-meta {
   margin-top: 0.8rem;
+}
+
+.contact-row {
+  display: grid;
+  gap: 0.6rem;
+  cursor: default;
+}
+
+.contact-row-body {
+  display: grid;
+  gap: 0.55rem;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.contact-row-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+}
+
+.contact-row-foot {
+  margin: 0;
+  color: #9fb2c6;
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.compact-subpanel {
+  padding: 0.85rem;
+}
+
+.review-strip {
+  gap: 0.55rem;
 }
 
 .chat-sidebar,
@@ -1240,6 +1290,7 @@ mark {
   .message-meta,
   .contact-row-main,
   .contact-row-meta,
+  .contact-row-actions,
   .result-meta {
     flex-direction: column;
   }

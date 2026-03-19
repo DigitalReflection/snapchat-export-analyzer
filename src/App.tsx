@@ -28,6 +28,7 @@ import {
   downloadHtml,
   downloadKeywordHitsCsv,
   downloadPlainText,
+  downloadReviewContactsCsv,
   downloadWorkspaceReport,
 } from './lib/exporters'
 import { buildWorkspaceLite } from './lib/insights'
@@ -57,6 +58,7 @@ type ModalState =
 const NOTES_KEY = 'export-viewer-pro-private-notes'
 const AI_SETTINGS_KEY = 'export-viewer-pro-ai-settings'
 const CONTACT_LABELS_KEY = 'export-viewer-pro-contact-labels'
+const REVIEW_LATER_KEY = 'export-viewer-pro-review-later'
 const LOCK_CODE_KEY = 'export-viewer-pro-lock-code'
 const LAST_PLATFORM_KEY = 'export-viewer-pro-last-platform'
 const DEFAULT_MODELS: Record<AIProvider, string> = {
@@ -159,7 +161,7 @@ const MEDIA_DETAIL_PATTERN = /\.(?:jpe?g|png|gif|heic|mp4|mov|webm|avi|mkv)$/i
 const THREAD_PAGE_SIZE = 200
 const LARGE_EXPORT_THRESHOLD = 4000
 const CONTACT_AI_QUESTION =
-  'Organize this selected thread into a factual timeline, interaction patterns, tone categories, repeated names or references, and open follow-up checks with evidence IDs.'
+  'Organize this selected thread into a factual timeline, interaction patterns, flirt and secrecy cues, repeated names or references, media sent by each side, and open follow-up checks with evidence IDs.'
 
 function scopedStorageKey(base: string, platform: Platform) {
   return `${base}-${platform}`
@@ -1119,6 +1121,7 @@ export default function App() {
   const [comparisonYear, setComparisonYear] = useState<string>('all')
   const [selectedContact, setSelectedContact] = useState('')
   const [contactLabels, setContactLabels] = useState<Record<string, ContactLabel>>({})
+  const [reviewLaterContacts, setReviewLaterContacts] = useState<Record<string, true>>({})
   const [contactGroupFilter, setContactGroupFilter] = useState<'all' | ContactLabel>('all')
   const [searchQuery, setSearchQuery] = useState('delete this, Jordan, address')
   const [threadMode, setThreadMode] = useState<ThreadMode>('chat')
@@ -1133,7 +1136,7 @@ export default function App() {
     model: DEFAULT_MODELS.gemini,
   })
   const [aiQuestion, setAiQuestion] = useState(
-    'Review the full chat history and summarize the strongest factual patterns, tone shifts, deletion indicators, and missing-thread gaps with evidence IDs.',
+    'Scan the full export for flirtation, secrecy, missing contacts, deletions, media sent in each direction, and the strongest factual patterns with evidence IDs.',
   )
   const [aiResult, setAiResult] = useState<AIResult | null>(null)
   const [aiError, setAiError] = useState<string | null>(null)
@@ -1194,6 +1197,7 @@ export default function App() {
     setIsHydrating(true)
     const notesKey = scopedStorageKey(NOTES_KEY, selectedPlatform)
     const labelsKey = scopedStorageKey(CONTACT_LABELS_KEY, selectedPlatform)
+    const reviewKey = scopedStorageKey(REVIEW_LATER_KEY, selectedPlatform)
     const snapshotKey = scopedStorageKey('workspace', selectedPlatform)
     const sampleUpload = PLATFORM_CONFIG[selectedPlatform].sampleUpload
 
@@ -1208,6 +1212,13 @@ export default function App() {
       }
     } else {
       setContactLabels({})
+    }
+    try {
+      const storedReviewLater = window.localStorage.getItem(reviewKey)
+      setReviewLaterContacts(storedReviewLater ? (JSON.parse(storedReviewLater) as Record<string, true>) : {})
+    } catch {
+      window.localStorage.removeItem(reviewKey)
+      setReviewLaterContacts({})
     }
 
     setSelectedContact('')
@@ -1225,6 +1236,9 @@ export default function App() {
         if (snapshot?.uploads?.length) {
           setUploads(snapshot.uploads)
           setContactAiResults(snapshot.contactAiResults ?? {})
+          if (snapshot.reviewLaterContacts?.length) {
+            setReviewLaterContacts(Object.fromEntries(snapshot.reviewLaterContacts.map((name) => [name, true] as const)))
+          }
           setStatus(
             `Restored ${snapshot.uploads.length} saved ${PLATFORM_CONFIG[selectedPlatform].label} upload(s) from this browser.`,
           )
@@ -1254,6 +1268,13 @@ export default function App() {
       JSON.stringify(contactLabels),
     )
   }, [contactLabels, isHydrating, selectedPlatform])
+  useEffect(() => {
+    if (!selectedPlatform || isHydrating) return
+    window.localStorage.setItem(
+      scopedStorageKey(REVIEW_LATER_KEY, selectedPlatform),
+      JSON.stringify(reviewLaterContacts),
+    )
+  }, [isHydrating, reviewLaterContacts, selectedPlatform])
   useEffect(
     () => window.sessionStorage.setItem(AI_SETTINGS_KEY, JSON.stringify(aiSettings)),
     [aiSettings],
@@ -1275,11 +1296,12 @@ export default function App() {
     void saveSnapshot({
       uploads: uploads as ParsedUpload[],
       contactAiResults,
+      reviewLaterContacts: Object.keys(reviewLaterContacts).filter((name) => reviewLaterContacts[name]),
       savedAt: new Date().toISOString(),
     }, scopedStorageKey('workspace', selectedPlatform)).catch(() => {
       setWorkspaceError('Local workspace persistence failed. The dashboard will keep working for this session.')
     })
-  }, [contactAiResults, isHydrating, selectedPlatform, uploads])
+  }, [contactAiResults, isHydrating, reviewLaterContacts, selectedPlatform, uploads])
   useEffect(() => {
     if (!selectedPlatform) {
       return
@@ -1586,6 +1608,10 @@ export default function App() {
     )
   }
 
+  function handleDownloadReviewLaterContacts() {
+    downloadReviewContactsCsv(reviewLaterQueue)
+  }
+
   const selectedDateMarkers = useMemo(() => buildDateMarkers(selectedThread), [selectedThread])
   const selectedMediaEvents = useMemo(
     () => selectedThread.filter((event) => isMediaEvent(event)),
@@ -1690,6 +1716,14 @@ export default function App() {
         .length,
     }),
     [contactLabels, workspace.contacts],
+  )
+  const reviewLaterQueue = useMemo(
+    () =>
+      sortContacts(
+        workspace.contacts.filter((contact) => Boolean(reviewLaterContacts[contact.name])),
+        'recent',
+      ),
+    [reviewLaterContacts, workspace.contacts],
   )
   const requiresAiForDeepReview = workspace.stats.totalEvents >= LARGE_EXPORT_THRESHOLD
 
@@ -1853,8 +1887,10 @@ export default function App() {
   async function handleResetLocalWorkspace() {
     if (!selectedPlatform || !viewerConfig) return
     await clearSnapshot(scopedStorageKey('workspace', selectedPlatform))
+    window.localStorage.removeItem(scopedStorageKey(REVIEW_LATER_KEY, selectedPlatform))
     setUploads([viewerConfig.sampleUpload])
     setContactAiResults({})
+    setReviewLaterContacts({})
     setAiResult(null)
     setSelectedContact('')
     setStatus(`Local ${viewerConfig.label} workspace cleared. Demo workspace loaded.`)
@@ -1926,6 +1962,18 @@ export default function App() {
     setModalState({ type: 'thread-focus', contactName })
   }
 
+  function toggleReviewLater(contactName: string) {
+    setReviewLaterContacts((current) => {
+      const next = { ...current }
+      if (next[contactName]) {
+        delete next[contactName]
+      } else {
+        next[contactName] = true
+      }
+      return next
+    })
+  }
+
   function moveModalContact(direction: -1 | 1) {
     if (!modalState || (modalState.type !== 'contact' && modalState.type !== 'thread-focus')) return
     const names = (filteredContacts.length ? filteredContacts : workspace.contacts).map((contact) => contact.name)
@@ -1987,7 +2035,7 @@ export default function App() {
                   <span>{contact.messageCount} chat rows</span>
                 </div>
                 <p>
-                  Intensity {contact.intensityScore}/10, secrecy {contact.secrecyScore}/10, romance {contact.romanticScore}/10
+                  Intensity {contact.intensityScore}/10, secrecy {contact.secrecyScore}/10, flirt {contact.romanticScore}/10
                 </p>
               </button>
             ))}
@@ -2187,6 +2235,13 @@ export default function App() {
                 <button className="secondary-button" onClick={() => setModalState({ type: 'contact', contactName: summary.name })} type="button">
                   Full details
                 </button>
+                <button
+                  className={reviewLaterContacts[summary.name] ? 'label-button active' : 'label-button'}
+                  onClick={() => toggleReviewLater(summary.name)}
+                  type="button"
+                >
+                  {reviewLaterContacts[summary.name] ? 'Saved' : 'Review later'}
+                </button>
               </div>
               <div className="button-row">
                 <button className="ghost-button" onClick={handleDownloadSelectedTranscript} type="button">
@@ -2282,6 +2337,13 @@ export default function App() {
                 <button className="secondary-button" onClick={() => setModalState({ type: 'thread-focus', contactName: summary.name })} type="button">
                   Chat focus
                 </button>
+                <button
+                  className={reviewLaterContacts[summary.name] ? 'label-button active' : 'label-button'}
+                  onClick={() => toggleReviewLater(summary.name)}
+                  type="button"
+                >
+                  {reviewLaterContacts[summary.name] ? 'Saved' : 'Review later'}
+                </button>
               </div>
               <div className="button-row">
                 {(['male', 'female', 'unknown'] as ContactLabel[]).map((label) => (
@@ -2306,7 +2368,7 @@ export default function App() {
               <article className="modal-card">
                 <h4>Conversation profile</h4>
                 <div className="score-row">
-                  <ScorePill label="Romance" value={summary.romanticScore} />
+                  <ScorePill label="Flirt" value={summary.romanticScore} />
                   <ScorePill label="Secrecy" value={summary.secrecyScore} />
                   <ScorePill label="Intensity" value={summary.intensityScore} />
                 </div>
@@ -3093,7 +3155,7 @@ export default function App() {
                         </span>
                       </div>
                       <div className="score-row">
-                        <ScorePill label="Romance" value={contact.romanticScore} />
+                        <ScorePill label="Flirt" value={contact.romanticScore} />
                         <ScorePill label="Secrecy" value={contact.secrecyScore} />
                         <ScorePill label="Intensity" value={contact.intensityScore} />
                       </div>
@@ -3157,7 +3219,7 @@ export default function App() {
 
         {activeTab === 'chats' ? (
           <section className={selectedPlatform === 'facebook' ? 'chat-layout facebook-workspace' : 'chat-layout'}>
-            <article className="panel chat-sidebar">
+            <article className="panel chat-sidebar" id="contact-browser">
               <SectionHeader
                 actions={
                   <span className="outline-pill">
@@ -3217,7 +3279,7 @@ export default function App() {
                   <select value={contactSort} onChange={(event) => setContactSort(event.target.value as ContactSort)}>
                     <option value="activity">Activity</option>
                     <option value="messages">Messages</option>
-                    <option value="romance">Romance score</option>
+                    <option value="romance">Flirt score</option>
                     <option value="secrecy">Secrecy score</option>
                     <option value="recent">Recent shift</option>
                     <option value="missing">Missing threads</option>
@@ -3238,33 +3300,85 @@ export default function App() {
                   Unlabeled ({contactGroups.unknown})
                 </button>
               </div>
+              <div className="subpanel compact-subpanel">
+                <div className="thread-header-row">
+                  <h3>Review later</h3>
+                  <div className="button-row">
+                    <button className="ghost-button" onClick={handleDownloadReviewLaterContacts} type="button">
+                      Export CSV
+                    </button>
+                  </div>
+                </div>
+                <div className="stack-list compact-stack review-strip">
+                  {reviewLaterQueue.length ? (
+                    reviewLaterQueue.slice(0, 6).map((contact) => (
+                      <button
+                        className="list-button"
+                        key={contact.name}
+                        onClick={() => {
+                          setSelectedContact(contact.name)
+                          setThreadSearch('')
+                          setThreadMode('chat')
+                        }}
+                        type="button"
+                      >
+                        <div className="list-head">
+                          <strong>{contact.name}</strong>
+                          <span>{formatDate(contact.lastSeen)}</span>
+                        </div>
+                        <p>
+                          Last file: {contact.lastSourceFile ?? 'Unknown'} · {contact.selfMessageCount} from you / {contact.contactMessageCount} from them
+                        </p>
+                      </button>
+                    ))
+                  ) : (
+                    <p className="empty-state">No contacts saved for later review yet.</p>
+                  )}
+                </div>
+              </div>
               <div className="contact-table">
                 {filteredContacts.map((contact) => (
-                  <button
+                  <div
                     className={selectedSummary?.name === contact.name ? 'contact-row active' : 'contact-row'}
                     key={contact.name}
-                    onClick={() => {
-                      setSelectedContact(contact.name)
-                      setThreadSearch('')
-                      setThreadMode('chat')
-                    }}
-                    type="button"
                   >
-                    <div className="contact-row-main">
-                      <strong>{contact.name}</strong>
-                      <span>
-                        {contact.messageCount} chat rows
-                        {yearFilter !== 'all'
-                          ? ` · ${scopedContactCounts.get(contact.name) ?? 0} in ${yearLabel(selectedYearValue)}`
-                          : ''}
-                      </span>
+                    <button
+                      className="contact-row-body"
+                      onClick={() => {
+                        setSelectedContact(contact.name)
+                        setThreadSearch('')
+                        setThreadMode('chat')
+                      }}
+                      type="button"
+                    >
+                      <div className="contact-row-main">
+                        <strong>{contact.name}</strong>
+                        <span>
+                          {contact.messageCount} chat rows
+                          {yearFilter !== 'all'
+                            ? ` · ${scopedContactCounts.get(contact.name) ?? 0} in ${yearLabel(selectedYearValue)}`
+                            : ''}
+                        </span>
+                      </div>
+                      <div className="contact-row-meta">
+                        <ScorePill label="Flirt" value={contact.romanticScore} />
+                        <ScorePill label="S" value={contact.secrecyScore} />
+                        <ScorePill label="I" value={contact.intensityScore} />
+                      </div>
+                      <p className="contact-row-foot">
+                        Last contact {formatDate(contact.lastSeen)} · File {contact.lastSourceFile ?? 'Unknown'}
+                      </p>
+                    </button>
+                    <div className="contact-row-actions">
+                      <button
+                        className={reviewLaterContacts[contact.name] ? 'label-button active' : 'label-button'}
+                        onClick={() => toggleReviewLater(contact.name)}
+                        type="button"
+                      >
+                        {reviewLaterContacts[contact.name] ? 'Saved' : 'Review later'}
+                      </button>
                     </div>
-                    <div className="contact-row-meta">
-                      <ScorePill label="R" value={contact.romanticScore} />
-                      <ScorePill label="S" value={contact.secrecyScore} />
-                      <ScorePill label="I" value={contact.intensityScore} />
-                    </div>
-                  </button>
+                  </div>
                 ))}
                 {filteredContacts.length === 0 ? (
                   <p className="empty-state">No contacts matched the current filter.</p>
@@ -3279,9 +3393,30 @@ export default function App() {
                     <SectionHeader
                       actions={
                         selectedSummary ? (
-                          <button className="primary-button" onClick={() => openContactModal(selectedSummary.name)} type="button">
-                            Open full thread
-                          </button>
+                          <div className="button-row">
+                            <button
+                              className="ghost-button"
+                              onClick={() => {
+                                setActiveTab('chats')
+                                window.requestAnimationFrame(() => {
+                                  document.getElementById('contact-browser')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                                })
+                              }}
+                              type="button"
+                            >
+                              Back to people
+                            </button>
+                            <button
+                              className={reviewLaterContacts[selectedSummary.name] ? 'label-button active' : 'label-button'}
+                              onClick={() => toggleReviewLater(selectedSummary.name)}
+                              type="button"
+                            >
+                              {reviewLaterContacts[selectedSummary.name] ? 'Saved' : 'Review later'}
+                            </button>
+                            <button className="primary-button" onClick={() => openContactModal(selectedSummary.name)} type="button">
+                              Open full thread
+                            </button>
+                          </div>
                         ) : null
                       }
                       eyebrow="Selected contact"
@@ -3299,12 +3434,28 @@ export default function App() {
                         <strong>{selectedThreadMessageCount}</strong>
                       </article>
                       <article className="mini-stat">
-                        <span>First message</span>
-                        <strong>{formatDay(selectedMarkerMap['First message']?.timestamp ?? null)}</strong>
+                        <span>From you</span>
+                        <strong>{selectedSummary.selfMessageCount}</strong>
                       </article>
                       <article className="mini-stat">
-                        <span>Last message</span>
-                        <strong>{formatDay(selectedMarkerMap['Last message']?.timestamp ?? null)}</strong>
+                        <span>From them</span>
+                        <strong>{selectedSummary.contactMessageCount}</strong>
+                      </article>
+                      <article className="mini-stat">
+                        <span>Media you sent</span>
+                        <strong>{selectedSummary.selfMediaCount}</strong>
+                      </article>
+                      <article className="mini-stat">
+                        <span>Media they sent</span>
+                        <strong>{selectedSummary.contactMediaCount}</strong>
+                      </article>
+                      <article className="mini-stat">
+                        <span>Last contact</span>
+                        <strong>{formatThreadTimestamp(selectedSummary.lastSeen ?? null)}</strong>
+                      </article>
+                      <article className="mini-stat">
+                        <span>Last file</span>
+                        <strong>{selectedSummary.lastSourceFile ?? 'Unknown'}</strong>
                       </article>
                       <article className="mini-stat">
                         <span>Latest sent</span>
@@ -3313,6 +3464,14 @@ export default function App() {
                       <article className="mini-stat">
                         <span>Oldest sent</span>
                         <strong>{formatThreadTimestamp(selectedThreadOldestEvent?.timestamp ?? null)}</strong>
+                      </article>
+                      <article className="mini-stat">
+                        <span>First message</span>
+                        <strong>{formatDay(selectedMarkerMap['First message']?.timestamp ?? null)}</strong>
+                      </article>
+                      <article className="mini-stat">
+                        <span>Last message</span>
+                        <strong>{formatDay(selectedMarkerMap['Last message']?.timestamp ?? null)}</strong>
                       </article>
                       <article className="mini-stat">
                         <span>Year coverage</span>
@@ -3325,7 +3484,7 @@ export default function App() {
                     </div>
 
                     <div className="score-row">
-                      <ScorePill label="Romance" value={selectedSummary.romanticScore} />
+                      <ScorePill label="Flirt" value={selectedSummary.romanticScore} />
                       <ScorePill label="Secrecy" value={selectedSummary.secrecyScore} />
                       <ScorePill label="Intensity" value={selectedSummary.intensityScore} />
                     </div>

@@ -74,6 +74,10 @@ export function downloadContactsCsv(contacts: ContactSummary[]) {
         name: contact.name,
         interactions: contact.interactions,
         messageCount: contact.messageCount,
+        selfMessageCount: contact.selfMessageCount,
+        contactMessageCount: contact.contactMessageCount,
+        selfMediaCount: contact.selfMediaCount,
+        contactMediaCount: contact.contactMediaCount,
         searchCount: contact.searchCount,
         friendEventCount: contact.friendEventCount,
         lateNightInteractions: contact.lateNightInteractions,
@@ -90,6 +94,30 @@ export function downloadContactsCsv(contacts: ContactSummary[]) {
         peakWeekday: contact.peakWeekday,
         firstSeen: contact.firstSeen,
         lastSeen: contact.lastSeen,
+        firstSourceFile: contact.firstSourceFile,
+        lastSourceFile: contact.lastSourceFile,
+      })),
+    ),
+    'text/csv;charset=utf-8',
+  )
+}
+
+export function downloadReviewContactsCsv(contacts: ContactSummary[]) {
+  download(
+    'review-later-contacts.csv',
+    toCsv(
+      contacts.map((contact) => ({
+        name: contact.name,
+        lastSeen: contact.lastSeen,
+        lastSourceFile: contact.lastSourceFile,
+        messageCount: contact.messageCount,
+        selfMessageCount: contact.selfMessageCount,
+        contactMessageCount: contact.contactMessageCount,
+        selfMediaCount: contact.selfMediaCount,
+        contactMediaCount: contact.contactMediaCount,
+        romanticScore: contact.romanticScore,
+        secrecyScore: contact.secrecyScore,
+        intensityScore: contact.intensityScore,
       })),
     ),
     'text/csv;charset=utf-8',
