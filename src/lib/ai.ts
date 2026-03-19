@@ -51,6 +51,7 @@ function buildPrompt(workspace: WorkspaceDataset, question: string) {
     'Stay neutral, factual, and evidence-based.',
     'Do not infer intent beyond observed patterns.',
     'Use citations in square brackets with event IDs when referencing evidence.',
+    'When the question asks for flirty messages or tone hits, list them from newest to oldest.',
     'Structure the answer with these sections: Facts, Patterns, Tone categories, Notable periods, Follow-up questions.',
     '',
     `User question: ${question}`,
@@ -61,7 +62,16 @@ function buildPrompt(workspace: WorkspaceDataset, question: string) {
 }
 
 function chunkChatEvents(workspace: WorkspaceDataset, maxChars = 18000) {
-  const chatEvents = workspace.events.filter((event) => event.category === 'chat')
+  const chatEvents = [...workspace.events]
+    .filter((event) => event.category === 'chat')
+    .sort((left, right) => {
+      if (left.timestamp && right.timestamp) {
+        return right.timestamp.localeCompare(left.timestamp)
+      }
+      if (left.timestamp) return -1
+      if (right.timestamp) return 1
+      return right.id.localeCompare(left.id)
+    })
   const chunks: string[] = []
   let current = ''
 
@@ -94,6 +104,7 @@ function buildChunkPrompt(question: string, chunk: string, index: number, total:
     'You are analyzing one chunk of chat messages from a communication intelligence dashboard.',
     'Stay factual and evidence-based.',
     'Do not speculate about intent.',
+    'If the question asks for flirty messages, list them from newest to oldest.',
     'Return bullet-style short findings with citations using event IDs.',
     `Chunk ${index + 1} of ${total}.`,
     `Question: ${question}`,
@@ -326,7 +337,14 @@ function chunkSelectedEvents(events: NormalizedEvent[], maxChars = 14000) {
   const chunks: string[] = []
   let current = ''
 
-  for (const event of events) {
+  for (const event of [...events].sort((left, right) => {
+    if (left.timestamp && right.timestamp) {
+      return right.timestamp.localeCompare(left.timestamp)
+    }
+    if (left.timestamp) return -1
+    if (right.timestamp) return 1
+    return right.id.localeCompare(left.id)
+  })) {
     const line = [
       `[${event.id}]`,
       event.timestamp ?? 'unknown-time',
@@ -363,6 +381,7 @@ function buildContactPrompt(
     'Stay neutral, factual, and evidence-based.',
     'Do not speculate about intent.',
     'Use event IDs in square brackets when referencing evidence.',
+    'If the question asks for flirty messages, list them from newest to oldest.',
     'Return these sections: Thread overview, Timeline, Interaction patterns, Tone categories, Repeated references, Open questions.',
     '',
     `User question: ${question}`,
@@ -378,6 +397,7 @@ function buildContactChunkPrompt(question: string, contactName: string, chunk: s
     `You are analyzing one selected contact thread for ${contactName}.`,
     'Stay factual and evidence-based.',
     'Do not speculate about intent.',
+    'If the question asks for flirty messages, list them from newest to oldest.',
     'Return compact bullet findings with event IDs in square brackets.',
     `Chunk ${index + 1} of ${total}.`,
     `Question: ${question}`,
@@ -467,12 +487,20 @@ export async function runContactAIReview(
   }
 
   const runProvider = getProviderRunner(settings)
-  const chunks = chunkSelectedEvents(events)
+  const orderedEvents = [...events].sort((left, right) => {
+    if (left.timestamp && right.timestamp) {
+      return right.timestamp.localeCompare(left.timestamp)
+    }
+    if (left.timestamp) return -1
+    if (right.timestamp) return 1
+    return right.id.localeCompare(left.id)
+  })
+  const chunks = chunkSelectedEvents(orderedEvents)
   let answer = ''
 
   if (chunks.length <= 1) {
     onProgress?.({ completed: 0, total: 1, label: 'Preparing selected thread' })
-    const prompt = `${buildContactPrompt(workspace, contact, events, entities, question)}\n\nThread rows:\n${chunks[0] ?? ''}`
+    const prompt = `${buildContactPrompt(workspace, contact, orderedEvents, entities, question)}\n\nThread rows:\n${chunks[0] ?? ''}`
     answer = await runProvider(prompt)
     onProgress?.({ completed: 1, total: 1, label: 'Selected thread organized' })
   } else {
@@ -491,7 +519,7 @@ export async function runContactAIReview(
     }
 
     answer = await runProvider(
-      buildContactSynthesisPrompt(workspace, contact, events, entities, question, chunkFindings),
+      buildContactSynthesisPrompt(workspace, contact, orderedEvents, entities, question, chunkFindings),
     )
     onProgress?.({
       completed: chunks.length + 1,

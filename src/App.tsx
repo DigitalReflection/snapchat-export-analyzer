@@ -163,7 +163,7 @@ const MEDIA_DETAIL_PATTERN = /\.(?:jpe?g|png|gif|heic|mp4|mov|webm|avi|mkv)$/i
 const THREAD_PAGE_SIZE = 200
 const LARGE_EXPORT_THRESHOLD = 4000
 const CONTACT_AI_QUESTION =
-  'Organize this selected thread into a factual timeline, interaction patterns, flirt and secrecy cues, repeated names or references, media sent by each side, and open follow-up checks with evidence IDs.'
+  'Organize this selected thread into a factual timeline, then list all flirty messages from newest to oldest with evidence IDs, followed by interaction patterns, secrecy cues, repeated names or references, media sent by each side, and open follow-up checks.'
 
 function scopedStorageKey(base: string, platform: Platform) {
   return `${base}-${platform}`
@@ -856,6 +856,8 @@ function ConversationList(props: {
   aliasIndex: Map<string, Set<string>>
   events: NormalizedEvent[]
   onEventClick: (eventId: string) => void
+  onOpenFullThread?: (contactName: string) => void
+  threadContactName?: string
   terms: string[]
   plainTextOnly?: boolean
   sortOrder: ThreadSort
@@ -886,6 +888,18 @@ function ConversationList(props: {
               <div className="message-headline">
                 <span className="message-type">{event.category}</span>
                 <span className="message-timestamp">{formatThreadTimestamp(event.timestamp)}</span>
+                {event.category === 'chat' && props.threadContactName && props.onOpenFullThread ? (
+                  <button
+                    className="inline-link-button"
+                    onClick={(clickEvent) => {
+                      clickEvent.stopPropagation()
+                      props.onOpenFullThread?.(props.threadContactName ?? actorLabel)
+                    }}
+                    type="button"
+                  >
+                    Open full chat
+                  </button>
+                ) : null}
               </div>
               <div className="message-bubble">
                 <div className="message-header-line">
@@ -1088,7 +1102,7 @@ export default function App() {
     model: DEFAULT_MODELS.gemini,
   })
   const [aiQuestion, setAiQuestion] = useState(
-    'Scan the full export for flirtation, secrecy, missing contacts, deletions, media sent in each direction, and the strongest factual patterns with evidence IDs.',
+    'Scan the full export for flirty messages newest to oldest, then secrecy, missing contacts, deletions, media sent in each direction, and the strongest factual patterns with evidence IDs.',
   )
   const [aiResult, setAiResult] = useState<AIResult | null>(null)
   const [aiError, setAiError] = useState<string | null>(null)
@@ -2283,8 +2297,10 @@ export default function App() {
                   aliasIndex={aliasIndex}
                   events={visibleThreadPage}
                   onEventClick={(eventId) => setModalState({ type: 'event', eventId })}
+                  onOpenFullThread={openContactFocusModal}
                   plainTextOnly={threadMode === 'chat'}
                   sortOrder={threadSort}
+                  threadContactName={selectedSummary?.name ?? undefined}
                   terms={modalTerms}
                 />
               )}
@@ -2487,8 +2503,10 @@ export default function App() {
                     aliasIndex={aliasIndex}
                     events={visibleThreadPage}
                     onEventClick={(eventId) => setModalState({ type: 'event', eventId })}
+                    onOpenFullThread={openContactFocusModal}
                     plainTextOnly={threadMode === 'chat'}
                     sortOrder={threadSort}
+                    threadContactName={selectedSummary?.name ?? undefined}
                     terms={modalTerms}
                   />
                 )}
@@ -3607,8 +3625,10 @@ export default function App() {
                             aliasIndex={aliasIndex}
                             events={selectedVisibleThreadPage}
                             onEventClick={(eventId) => setModalState({ type: 'event', eventId })}
+                            onOpenFullThread={openContactFocusModal}
                             plainTextOnly={threadMode === 'chat'}
                             sortOrder={threadSort}
+                            threadContactName={selectedSummary?.name ?? undefined}
                             terms={selectedThreadTerms}
                           />
                         )}
