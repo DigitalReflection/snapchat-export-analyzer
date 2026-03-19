@@ -376,6 +376,56 @@ function renderTranscriptBlocks(value: string | null | undefined, terms: string[
   ))
 }
 
+function parseFacebookTranscriptBlocks(value: string | null | undefined) {
+  const text = formatPlainConversationText(value)
+  if (!text) return []
+
+  const matches = [...text.matchAll(THREAD_TIMESTAMP_PATTERN)]
+  const blocks: TranscriptBlock[] = []
+
+  if (!matches.length) {
+    const { actor, text: body } = extractTranscriptActor(text)
+    blocks.push({ timestamp: null, actor, text: body })
+    return blocks
+  }
+
+  matches.forEach((match, index) => {
+    const timestamp = match[0]?.trim() ?? null
+    const start = (match.index ?? 0) + (match[0]?.length ?? 0)
+    const end = matches[index + 1]?.index ?? text.length
+    const segment = text.slice(start, end).trim()
+
+    if (!segment) {
+      blocks.push({ timestamp, actor: null, text: '' })
+      return
+    }
+
+    const colonSplit = segment.split(':')
+    if (colonSplit.length >= 2 && colonSplit[0].trim().length > 0) {
+      const actor = colonSplit.shift()!.trim()
+      const body = colonSplit.join(':').trim()
+      blocks.push({ timestamp, actor: actor || null, text: body })
+      return
+    }
+
+    const actorMatch = segment.match(
+      /^([A-Z][A-Za-z0-9'._-]+(?:\s+[A-Z][A-Za-z0-9'._-]+){0,2})\s+(.*)$/,
+    )
+    if (actorMatch) {
+      blocks.push({
+        timestamp,
+        actor: actorMatch[1].trim() || null,
+        text: actorMatch[2].trim(),
+      })
+      return
+    }
+
+    blocks.push({ timestamp, actor: null, text: segment })
+  })
+
+  return blocks
+}
+
 function extractTranscriptActor(text: string) {
   const cleaned = separateCamelCaseWords(text.replace(/^[\s,:;'"`â¤ï¸Ž€¢-]+/, ''))
   const openMatch = cleaned.match(
@@ -664,6 +714,7 @@ function ConversationList(props: {
   terms: string[]
   plainTextOnly?: boolean
   sortOrder: ThreadSort
+  platform: Platform
 }) {
   const events = sortThreadEvents(props.events, props.sortOrder)
 
@@ -678,7 +729,12 @@ function ConversationList(props: {
 
         const actorLabel = extractActorValue(event) ?? (role === 'self' ? 'You' : event.contact ?? 'Unknown')
         const displayText = props.plainTextOnly ? eventConversationText(event) : eventSummaryText(event)
-        const transcriptBlocks = props.plainTextOnly ? splitReadableTranscript(displayText) : []
+        const transcriptBlocks =
+          props.platform === 'facebook' && props.plainTextOnly
+            ? parseFacebookTranscriptBlocks(displayText)
+            : props.plainTextOnly
+              ? splitReadableTranscript(displayText)
+              : []
 
         return (
           <div className={`conversation-item role-${role}`} key={event.id}>
@@ -2062,6 +2118,7 @@ export default function App() {
                   onEventClick={(eventId) => setModalState({ type: 'event', eventId })}
                   plainTextOnly={threadMode === 'chat'}
                   sortOrder={threadSort}
+                  platform={selectedPlatform ?? 'snapchat'}
                   terms={modalTerms}
                 />
                 {visibleThread.length === 0 ? (
@@ -3075,6 +3132,7 @@ export default function App() {
                         onEventClick={(eventId) => setModalState({ type: 'event', eventId })}
                         plainTextOnly={threadMode === 'chat'}
                         sortOrder={threadSort}
+                        platform={selectedPlatform ?? 'snapchat'}
                         terms={selectedThreadTerms}
                       />
                       {selectedVisibleThread.length === 0 ? (
