@@ -576,12 +576,25 @@
 
 .message-bubble {
   display: grid;
-  gap: 0.45rem;
+  gap: 0.4rem;
   padding: 0.9rem 1rem;
   border-radius: 18px;
   border: 1px solid rgba(108, 255, 193, 0.12);
   background: rgba(9, 16, 24, 0.92);
   min-width: 0;
+}
+
+.message-header-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.6rem;
+  align-items: center;
+}
+
+.message-time {
+  color: #9ab6d0;
+  font-size: 0.78rem;
+  white-space: nowrap;
 }
 
 .message-row.role-self .message-bubble {
@@ -622,7 +635,7 @@
 }
 
 .message-actor {
-  font-size: 0.8rem;
+  font-size: 0.82rem;
   font-weight: 700;
   letter-spacing: 0.03em;
   color: #7fe3ff;
@@ -640,7 +653,7 @@
 
 .transcript-stream {
   display: grid;
-  gap: 0.7rem;
+  gap: 0.55rem;
 }
 
 .transcript-turn {

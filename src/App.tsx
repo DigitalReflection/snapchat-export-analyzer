@@ -676,6 +676,7 @@ function ConversationList(props: {
         const showDay = index === 0 || dayKey !== previousDayKey
         const role = resolveConversationRole(event, props.aliasIndex)
 
+        const actorLabel = extractActorValue(event) ?? (role === 'self' ? 'You' : event.contact ?? 'Unknown')
         const displayText = props.plainTextOnly ? eventConversationText(event) : eventSummaryText(event)
         const transcriptBlocks = props.plainTextOnly ? splitReadableTranscript(displayText) : []
 
@@ -692,16 +693,17 @@ function ConversationList(props: {
                 <span className="message-timestamp">{formatThreadTimestamp(event.timestamp)}</span>
               </div>
               <div className="message-bubble">
-                <span className="message-actor">
-                  {extractActorValue(event) ?? (role === 'self' ? 'You' : event.contact ?? 'Unknown')}
-                </span>
+                <div className="message-header-line">
+                  <span className="message-actor">{actorLabel}</span>
+                  <span className="message-time">{formatThreadTimestamp(event.timestamp)}</span>
+                </div>
                 {props.plainTextOnly && transcriptBlocks.length > 0 ? (
                   <div className="transcript-stream">
                     {transcriptBlocks.map((block, blockIndex) => (
                       <div className="transcript-turn" key={`${event.id}-${blockIndex}`}>
                         <div className="transcript-turn-head">
                           {block.timestamp ? <span className="transcript-timestamp">{block.timestamp}</span> : null}
-                          {block.actor ? <strong className="transcript-actor">{block.actor}</strong> : null}
+                          <strong className="transcript-actor">{block.actor ?? actorLabel}</strong>
                         </div>
                         <div className="transcript-body">
                           <HighlightedText terms={props.terms} text={block.text} />
@@ -712,7 +714,12 @@ function ConversationList(props: {
                 ) : (
                   <div className="message-copy">
                     {displayText ? (
-                      renderTranscriptBlocks(displayText, props.terms)
+                      <>
+                        <strong className="transcript-actor">{actorLabel}</strong>
+                        <div className="transcript-body">
+                          <HighlightedText terms={props.terms} text={displayText} />
+                        </div>
+                      </>
                     ) : (
                       <span className="muted-text">No readable chat text was recovered for this row.</span>
                     )}
