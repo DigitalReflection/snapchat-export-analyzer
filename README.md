@@ -1,6 +1,14 @@
+<p align="center">
+  <img src="./docs/readme-banner.svg" alt="Snapchat Export Analyzer banner" width="100%" />
+</p>
+
 # Snapchat Export Analyzer
 
 A privacy-first web dashboard for reviewing communication exports that an account owner willingly provides. The app runs mostly in the browser so uploads stay local, while still supporting deeper analytics, evidence-backed summaries, and optional AI-assisted review.
+
+<p align="center">
+  <code>React</code> <code>Vite</code> <code>Local Parsing</code> <code>Evidence</code> <code>AI Review</code>
+</p>
 
 ## Cheap stack
 

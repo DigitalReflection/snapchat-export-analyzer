@@ -1,0 +1,69 @@
+<svg width="1280" height="360" viewBox="0 0 1280 360" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="84" y1="42" x2="1211" y2="324" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#08131D"/>
+      <stop offset="1" stop-color="#102234"/>
+    </linearGradient>
+    <radialGradient id="glowA" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(1016 118) rotate(90) scale(138)">
+      <stop stop-color="#5EC7FF"/>
+      <stop offset="1" stop-color="#5EC7FF" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowB" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(1124 288) rotate(90) scale(158)">
+      <stop stop-color="#FFD36D"/>
+      <stop offset="1" stop-color="#FFD36D" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="beam" x1="928" y1="54" x2="1230" y2="322" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#5EC7FF" stop-opacity="0.2"/>
+      <stop offset="1" stop-color="#FFD36D" stop-opacity="0.05"/>
+    </linearGradient>
+  </defs>
+  <rect width="1280" height="360" rx="28" fill="#07111B"/>
+  <rect width="1280" height="360" rx="28" fill="url(#bg)"/>
+  <g opacity="0.16">
+    <path d="M0 88H1280" stroke="#9CC8FF"/>
+    <path d="M0 148H1280" stroke="#9CC8FF"/>
+    <path d="M0 208H1280" stroke="#9CC8FF"/>
+    <path d="M0 268H1280" stroke="#9CC8FF"/>
+    <path d="M168 0V360" stroke="#9CC8FF"/>
+    <path d="M328 0V360" stroke="#9CC8FF"/>
+    <path d="M488 0V360" stroke="#9CC8FF"/>
+    <path d="M648 0V360" stroke="#9CC8FF"/>
+    <path d="M808 0V360" stroke="#9CC8FF"/>
+    <path d="M968 0V360" stroke="#9CC8FF"/>
+    <path d="M1128 0V360" stroke="#9CC8FF"/>
+  </g>
+  <circle cx="1016" cy="118" r="138" fill="url(#glowA)">
+    <animate attributeName="opacity" values="0.78;0.98;0.78" dur="6s" repeatCount="indefinite"/>
+  </circle>
+  <circle cx="1124" cy="288" r="158" fill="url(#glowB)">
+    <animate attributeName="opacity" values="0.48;0.8;0.48" dur="7s" repeatCount="indefinite"/>
+  </circle>
+  <path d="M920 32L1240 322" stroke="url(#beam)" stroke-width="120" stroke-linecap="round"/>
+  <rect x="72" y="54" width="246" height="34" rx="17" fill="#0D2133" stroke="#2E5A77"/>
+  <text x="195" y="76" text-anchor="middle" fill="#A8D7FF" font-family="Segoe UI, Arial, sans-serif" font-size="15" font-weight="700" letter-spacing="2">PRIVACY-FIRST</text>
+  <text x="72" y="154" fill="#F4FBFF" font-family="Segoe UI, Arial, sans-serif" font-size="54" font-weight="800" letter-spacing="1.4">SNAPCHAT EXPORT ANALYZER</text>
+  <text x="72" y="198" fill="#C5D8E8" font-family="Segoe UI, Arial, sans-serif" font-size="22" font-weight="500">Privacy-first export review with local parsing, evidence-backed summaries, and optional AI assist.</text>
+  <g>
+    <rect x="72" y="248" width="180" height="52" rx="16" fill="#0E1D2D" stroke="#2C566C"/>
+    <rect x="270" y="248" width="180" height="52" rx="16" fill="#0E1D2D" stroke="#2C566C"/>
+    <rect x="468" y="248" width="180" height="52" rx="16" fill="#0E1D2D" stroke="#2C566C"/>
+    <text x="162" y="281" text-anchor="middle" fill="#F4FBFF" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700">local parsing</text>
+    <text x="360" y="281" text-anchor="middle" fill="#F4FBFF" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700">evidence</text>
+    <text x="558" y="281" text-anchor="middle" fill="#F4FBFF" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700">AI review</text>
+  </g>
+  <rect x="914" y="58" width="256" height="244" rx="28" fill="rgba(10, 24, 37, 0.65)" stroke="#284D64"/>
+  <path d="M964 110H1120" stroke="#5EC7FF" stroke-width="4" stroke-linecap="round">
+    <animate attributeName="stroke-opacity" values="0.35;1;0.35" dur="4.5s" repeatCount="indefinite"/>
+  </path>
+  <path d="M964 146H1088" stroke="#FFD36D" stroke-width="4" stroke-linecap="round">
+    <animate attributeName="stroke-opacity" values="0.25;0.95;0.25" dur="5s" repeatCount="indefinite"/>
+  </path>
+  <path d="M964 182H1138" stroke="#5EC7FF" stroke-width="4" stroke-linecap="round">
+    <animate attributeName="stroke-opacity" values="0.4;1;0.4" dur="5.5s" repeatCount="indefinite"/>
+  </path>
+  <circle cx="1112" cy="242" r="40" fill="#FFD36D" opacity="0.16">
+    <animate attributeName="r" values="34;42;34" dur="6s" repeatCount="indefinite"/>
+  </circle>
+  <circle cx="1018" cy="236" r="16" fill="#5EC7FF" opacity="0.74"/>
+  <circle cx="1070" cy="226" r="10" fill="#F4FBFF" opacity="0.78"/>
+</svg>
